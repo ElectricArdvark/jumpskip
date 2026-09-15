@@ -2,12 +2,29 @@
 
 A powerful, lightweight Lua script for **MPV** that detects and skips media segments (intros, recaps, outros/credits, and previews) using crowdsourced timestamp data from **TheIntroDB**, **IntroDB**, and **SkipDB**.
 
-<img width="1920" height="1080" alt="Screenshot (123)" src="https://github.com/user-attachments/assets/56985e56-e17a-4786-a118-e9de9c653bee" />
-
-
 OSC by [ModernZ](https://github.com/Samillion/ModernZ).
 
-Use my configs and scripts [MPV Config](https://github.com/ElectricArdvark/jumpskip/wiki/MPV-Config)
+<img width="1920" height="1080" alt="Screenshot (123)" src="https://github.com/user-attachments/assets/56985e56-e17a-4786-a118-e9de9c653bee" />
+<img width="1920" height="1080" alt="Screenshot (124)" src="https://github.com/user-attachments/assets/d17be605-5bd0-469b-a948-306f1d72fd32" />
+
+ ## **Colored Segments work only using a modified ModernZ** [Guide](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments).
+ 
+<img width="24" height="24" alt="output-onlinepngtools" src="https://github.com/user-attachments/assets/7455cd12-811c-4446-b1d9-640f4ef13a61" /> Intro
+
+<img width="24" height="24" alt="output-onlinepngtools (1)" src="https://github.com/user-attachments/assets/3b07a45b-72b1-488e-8510-b062d23b442b" /> Recap
+
+<img width="24" height="24" alt="output-onlinepngtools (2)" src="https://github.com/user-attachments/assets/423b4958-3686-4795-b721-a6bcc3c322b9" /> Outro/Credits
+
+<img width="24" height="24" alt="output-onlinepngtools (3)" src="https://github.com/user-attachments/assets/8e9ba2fd-bceb-4426-a26c-b0c3bbe367bc" /> Preview
+
+
+All color changeable in **modernz.conf**
+
+---
+
+### My [MPV Config](https://github.com/ElectricArdvark/jumpskip/wiki/MPV-Config)
+
+---
 
 ## Features
 
@@ -49,6 +66,8 @@ Use my configs and scripts [MPV Config](https://github.com/ElectricArdvark/jumps
 ---
 
 ## Installation
+
+Download [modernz.lua](https://raw.githubusercontent.com/ElectricArdvark/jumpskip/main/jumpskip.lua) and [modernz.conf](https://raw.githubusercontent.com/ElectricArdvark/jumpskip/main/jumpskip.conf)
 
 ### For Portable mpv:
 1. Copy `jumpskip.lua` into your mpv `scripts` directory:
@@ -134,6 +153,11 @@ hint_color=AAAAAA
 # OSD notification on skip:
 show_osd_message=yes
 osd_message_duration=2.0
+
+# mark_chapters additionally inserts '<type>' chapter
+# entries at segment boundaries. Note: chapter navigation
+# (PgUp/PgDn) will also stop at these boundaries.
+mark_chapters=yes
 
 # Debug logging to mpv terminal:
 debug_mode=no
