@@ -32,6 +32,7 @@ local user_opts = {
     skip_recap           = true,
     skip_outro           = true,
     skip_preview         = false,
+    mark_chapters        = true,
     start_offset         = 0.0,
     end_offset           = 0.0,
     provider_priority    = "theintrodb,introdb,skipdb",
@@ -726,6 +727,36 @@ local function merge_segment_lists(primary, secondary)
     return result
 end
 
+local function publish_segments(segments)
+    local published = {}
+    for _, seg in ipairs(segments) do
+        table.insert(published, {
+            start   = seg.start_sec,
+            ["end"] = seg.end_sec,
+            kind    = seg.type,
+        })
+    end
+    local ok = pcall(mp.set_property_native, "user-data/jumpskip/segments", published)
+    if not ok then
+        log_debug("user-data properties unavailable (mpv < 0.36); seekbar highlights disabled")
+    end
+
+    if user_opts.mark_chapters and #segments > 0 then
+        local chapters = mp.get_property_native("chapter-list") or {}
+        for _, seg in ipairs(segments) do
+            -- Capitalize the first letter of the segment type
+            local capitalized_title = seg.type:gsub("^%l", string.upper)
+            
+            table.insert(chapters, { title = capitalized_title, time = seg.start_sec })
+            table.insert(chapters, { title = capitalized_title, time = seg.end_sec })
+        end
+        table.sort(chapters, function(a, b) return a.time < b.time end)
+        mp.set_property_native("chapter-list", chapters)
+        log_debug("Inserted %d segment chapter markers", #segments * 2)
+    end
+end
+
+
 local function query_segments_pipeline()
     if not user_opts.enabled then return end
 
@@ -800,6 +831,7 @@ local function query_segments_pipeline()
                         state.segments_loaded = true
                         state.query_in_progress = false
                         log_segments_summary(state.segments, providers_raw)
+                        publish_segments(final_segs)
                     end
                 end)
             end
@@ -1094,6 +1126,7 @@ local function reset_state()
         state.overlay.data = ""
         state.overlay:update()
     end
+    pcall(function() mp.del_property("user-data/jumpskip/segments") end)
 end
 
 local function on_file_loaded()

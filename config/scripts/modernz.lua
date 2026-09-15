@@ -156,6 +156,10 @@ local user_opts = {
     nibble_color = "#FF8232",              -- color of chapter nibbles on the seekbar
     nibble_current_color = "#FFFFFF",      -- color of the current chapter nibble on the seekbar
     ab_loop_color = "#2596be",             -- color of the A/B loop range on the seekbar
+    jumpskip_intro_color = "#00a5ff",      -- color of intro segment highlights on the seekbar (jumpskip)
+    jumpskip_recap_color = "#f8bc3a",      -- color of recap segment highlights on the seekbar (jumpskip)
+    jumpskip_outro_color = "#e75c6c",      -- color of outro segment highlights on the seekbar (jumpskip)
+    jumpskip_preview_color = "#43cb44",    -- color of preview segment highlights on the seekbar (jumpskip)
 
     osc_fade_strength = 100,               -- strength of the OSC background fade (0 to disable)
     fade_blur_strength = 100,              -- blur strength for the OSC alpha fade. caution: high values can take a lot of CPU time to render
@@ -1449,6 +1453,28 @@ local function draw_ab_loop_range(element, elem_ass)
     elem_ass:rect_cw(ax, slider_lo.gap, bx, elem_geo.h - slider_lo.gap)
 end
 
+-- draw intro/outro segment highlights published by jumpskip.lua (user-data/jumpskip/segments)
+local function draw_jumpskip_ranges(element, elem_ass)
+    if element.name ~= "seekbar" then return end
+    local segs = state.jumpskip_segments
+    if type(segs) ~= "table" or #segs == 0 or not state.duration or state.duration <= 0 then return end
+    local slider_lo = element.layout.slider
+    local elem_geo = element.layout.geometry
+    for _, seg in ipairs(segs) do
+        local s = tonumber(seg.start) or 0
+        local e = tonumber(seg["end"]) or 0
+        if e > s and s < state.duration then
+            local sx = get_slider_ele_pos_for(element, math.max(0, s) / state.duration * 100)
+            local ex = get_slider_ele_pos_for(element, math.min(e, state.duration) / state.duration * 100)
+            if ex > sx then
+                local color = user_opts["jumpskip_" .. tostring(seg.kind) .. "_color"] or user_opts.jumpskip_intro_color
+                begin_draw_layer(element, elem_ass, color)
+                elem_ass:rect_cw(sx, slider_lo.gap, ex, elem_geo.h - slider_lo.gap)
+            end
+        end
+    end
+end
+
 local function draw_seekbar_nibbles(element, elem_ass)
     local slider_lo = element.layout.slider
     local elem_geo = element.layout.geometry
@@ -1650,6 +1676,7 @@ local function render_elements(master_ass, osc_vis, wc_vis)
                 draw_seekbar_progress(element, elem_ass)
                 draw_seekbar_ranges(element, elem_ass, handle_x, handle_radius)
                 draw_ab_loop_range(element, elem_ass)
+                draw_jumpskip_ranges(element, elem_ass)
                 draw_seekbar_handle(element, elem_ass, handle_x, handle_radius, anim_override, is_active) -- draw handle on top of progress
 
                 elem_ass:draw_stop()
@@ -4205,6 +4232,10 @@ observe_cached("border", request_init_resize)
 observe_cached("title-bar", request_init_resize)
 observe_cached("window-maximized", request_init_resize)
 observe_cached("idle-active", request_tick)
+mp.observe_property("user-data/jumpskip/segments", "native", function(_, val)
+    state.jumpskip_segments = val
+    request_tick()
+end)
 mp.observe_property("user-data/mpv/console/open", "bool", function(_, val)
     if val and user_opts.visibility == "auto" and not user_opts.showonselect and not state.keeponpause_active then
         -- clear pending thumbnail
@@ -4473,6 +4504,7 @@ local function validate_user_opts()
         user_opts.seekbar_cache_color, user_opts.hover_effect_color, user_opts.windowcontrols_close_hover, user_opts.windowcontrols_max_hover,
         user_opts.windowcontrols_min_hover, user_opts.cache_info_color, user_opts.thumbnail_box_outline, user_opts.nibble_color,
         user_opts.nibble_current_color, user_opts.seek_handle_color, user_opts.ab_loop_color,
+        user_opts.jumpskip_intro_color, user_opts.jumpskip_outro_color, user_opts.jumpskip_recap_color, user_opts.jumpskip_preview_color,
     }
 
     for _, color in pairs(colors) do
