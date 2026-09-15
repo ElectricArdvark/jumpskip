@@ -5,7 +5,9 @@ A powerful, lightweight Lua script for **MPV** that detects and skips media segm
 <img width="1920" height="1080" alt="Screenshot (123)" src="https://github.com/user-attachments/assets/56985e56-e17a-4786-a118-e9de9c653bee" />
 
 
-OSC by [ModernZ](https://github.com/Samillion/ModernZ)
+OSC by [ModernZ](https://github.com/Samillion/ModernZ).
+
+Use my configs and scripts [MPV Config](https://github.com/ElectricArdvark/jumpskip/wiki/MPV-Config)
 
 ## Features
 
