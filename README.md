@@ -7,7 +7,8 @@ OSC by [ModernZ](https://github.com/Samillion/ModernZ).
 <img width="1920" height="1080" alt="Screenshot (123)" src="https://github.com/user-attachments/assets/56985e56-e17a-4786-a118-e9de9c653bee" />
 <img width="1920" height="1080" alt="Screenshot (124)" src="https://github.com/user-attachments/assets/d17be605-5bd0-469b-a948-306f1d72fd32" />
 
- ## **Colored Segments work only using a modified ModernZ** [Guide](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments).
+> [!IMPORTANT]
+> **Colored Segments work only using a modified ModernZ** [Guide](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments).
  
 <img width="24" height="24" alt="output-onlinepngtools" src="https://github.com/user-attachments/assets/7455cd12-811c-4446-b1d9-640f4ef13a61" /> Intro
 
@@ -18,7 +19,7 @@ OSC by [ModernZ](https://github.com/Samillion/ModernZ).
 <img width="24" height="24" alt="output-onlinepngtools (3)" src="https://github.com/user-attachments/assets/8e9ba2fd-bceb-4426-a26c-b0c3bbe367bc" /> Preview
 
 
-All color changeable in **modernz.conf**
+All colors changeable in **modernz.conf**
 
 ---
 
@@ -36,6 +37,10 @@ All color changeable in **modernz.conf**
   - Configurable provider priority (`theintrodb,introdb,skipdb` or in any order).
   - Seamless fallback: if the primary provider has no match or encounters a network error, the script automatically queries the next provider.
   - **Segment Merging**: If the primary provider has an intro but lacks an outro or recap, the script queries subsequent providers to fill in missing segment types.
+- **Colored Segments**:
+  - Show skippable segments types directly in the seekbar with diffrent customizable colors
+  `script-opts/modernz.conf`.
+  - Requires modified [ModernZ](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments)
 - **Non-Blocking Asynchronous HTTP**:
   - HTTP requests are performed asynchronously in the background using mpv's native `mp.command_native_async` with system `curl`.
   - Zero UI freezing, stuttering, or playback interruptions.
@@ -53,9 +58,6 @@ All color changeable in **modernz.conf**
   - Zero-config title-to-ID fallback lookup via Cinemeta or optional TMDb API.
 - **Fully Configurable**:
   - Fine-tune timing offsets, segment toggles, provider priorities, timeouts, colors, and button positions via `script-opts/jumpskip.conf`.
- **Colored Segments**:
-  - Show skippable segments types directly in the seekbar with diffrent customizable colors
-  `script-opts/modernz.conf`.
 ---
 
 ## Dependencies
@@ -69,7 +71,7 @@ All color changeable in **modernz.conf**
 
 ## Installation
 
-Download [modernz.lua](https://raw.githubusercontent.com/ElectricArdvark/jumpskip/main/jumpskip.lua) and [modernz.conf](https://raw.githubusercontent.com/ElectricArdvark/jumpskip/main/jumpskip.conf)
+Download [jumpskip.lua](https://raw.githubusercontent.com/ElectricArdvark/jumpskip/main/jumpskip.lua) and [jumpskip.conf](https://raw.githubusercontent.com/ElectricArdvark/jumpskip/main/jumpskip.conf)
 
 ### For Portable mpv:
 1. Copy `jumpskip.lua` into your mpv `scripts` directory:
@@ -96,72 +98,154 @@ Download [modernz.lua](https://raw.githubusercontent.com/ElectricArdvark/jumpski
 Create or edit `~~/script-opts/jumpskip.conf`:
 
 ```ini
-# Master toggle
+# Master toggle for the script (yes/no)
 enabled=yes
 
 # Auto-skip behavior:
 # Set to 'yes' to automatically skip segments when entering them without clicking.
-# Set to 'no' to display the on-screen button and wait for click or keybind.
+# Set to 'no' to display the on-screen button and wait for user click or keybind.
 auto_skip=no
 
-# Countdown before auto-skipping (in seconds, 0 = instant):
+# Auto-skip countdown (in seconds):
+# If auto_skip is enabled and countdown > 0, an on-screen countdown prompt will be
+# displayed before skipping, allowing you to cancel by clicking or seeking away.
+# If set to 0, auto-skip takes effect immediately upon entering the segment.
 auto_skip_countdown=0
 
-# Segment types to detect:
+# Segment types to auto-skip (comma-separated):
+# Accepted values: intro, outro, recap, preview (whitespace around entries is ignored).
+# - When left EMPTY (default), the global 'auto_skip' option above governs ALL
+#   segment types.
+# - When set (e.g. 'intro,recap'), ONLY the listed types are skipped automatically;
+#   every other detected type shows the manual skip button / keybind prompt instead,
+#   regardless of the 'auto_skip' setting.
+# Invalid entries are ignored with a warning in the mpv log.
+autoskip_types=
+
+# Skip button timeout (in seconds):
+# Automatically hides the on-screen skip button if it has not been clicked (or the
+# keybind pressed) within this many seconds after it appears.
+# The keybind remains active for the rest of the segment even after the button hides.
+# 0 = button stays visible for the entire segment (default).
+skip_button_timeout=3
+
+# Segment types to detect and allow skipping:
 skip_intro=yes
 skip_recap=yes
 skip_outro=yes
-skip_preview=no
+skip_preview=yes
+
+# Per-provider, per-segment-type toggles:
+# Set an entry to 'no' to ignore that segment type from that specific provider,
+# while the same type from other providers (and other types from the same
+# provider) continue to work normally.
+# Example: skipdb_intro_segment=no drops intro segments sourced from SkipDB only.
+# Note: these act as an additional filter on top of the global skip_<type>
+# options above; a type disabled globally stays disabled for every provider.
+
+theintrodb_intro_segment=yes
+theintrodb_recap_segment=yes
+theintrodb_outro_segment=yes
+theintrodb_preview_segment=yes
+introdb_intro_segment=yes
+introdb_recap_segment=yes
+introdb_outro_segment=yes
+introdb_preview_segment=yes
+skipdb_intro_segment=yes
+skipdb_recap_segment=yes
+skipdb_outro_segment=yes
+skipdb_preview_segment=no
 
 # Timing offsets (in seconds):
-# - start_offset: negative (e.g. -0.5) triggers button earlier; positive triggers later.
+# Adjust segment start and end times to match your media cut.
+# - start_offset: negative value (e.g. -0.5) triggers the prompt/button slightly earlier;
+#   positive value triggers it later.
 # - end_offset: seconds added or subtracted to the jump target timestamp.
 start_offset=0.0
 end_offset=0.0
 
-# Provider priority order ('theintrodb,introdb,skipdb' or any subset/order):
-provider_priority=theintrodb,introdb,skipdb
+# Provider priority order (comma-separated):
+# Supported providers: 'theintrodb', 'introdb', 'skipdb'
+# e.g., 'theintrodb,introdb,skipdb' queries TheIntroDB first, then IntroDB, then SkipDB.
+# Omit any provider to exclude it entirely.
+provider_priority=introdb,theintrodb,skipdb
 
 # Merge providers (yes/no):
-# If yes, supplements missing segments from secondary provider.
+# When enabled, if the primary provider only has an intro but no outro/recap,
+# the script queries the secondary provider to retrieve the missing segment types.
 merge_providers=yes
 
 # Optional API Keys:
+# TheIntroDB API key (Authorization: Bearer <key>)
+# Increases daily rate/usage limits and weights your submissions higher.
 theintrodb_api_key=
+
+# IntroDB API key (X-API-Key: idb_...)
+# Optional for reading segments.
 introdb_api_key=
+
+# SkipDB API key (Authorization: Bearer skdb_... or X-API-Key: skdb_...)
+# Reading is open (120 req/min); a key is only needed for submitting segments.
 skipdb_api_key=
+
+# Optional TMDb API key:
+# Used to resolve media titles to TMDb IDs if the media file lacks an IMDb/TMDb ID.
+# If left blank, Cinemeta's free public catalog lookup is used automatically.
 tmdb_api_key=
 
-# Network timeout (seconds):
+# HTTP network request timeout (in seconds) for curl subprocess:
 request_timeout=8
 
-# Keybinding:
+# Keybinding to trigger skip when within an active segment:
+# e.g. 'Tab', 'Return', 'ctrl+s', 's'
 keybind=Tab
 
-# Minimum segment duration to consider valid (seconds):
+# Minimum segment duration (in seconds) to consider valid:
 min_segment_duration=3.0
 
-# Button position: 'bottom-right', 'bottom-left', 'top-right', 'top-left'
+# On-Screen Display (OSD) Button Position:
+# Options: 'bottom-right', 'bottom-left', 'top-right', 'top-left'
 button_position=bottom-right
-button_margin_x=60
-button_margin_y=80
 
-# Visual Colors (Hex BGR format for ASS styling):
-accent_color=E75C6C
+# Button Margins (scaled to 1080p base):
+button_margin_x=60
+button_margin_y=120
+
+# Button Dimensions & Font:
+button_width=220
+button_height=56
+button_font_size=24
+button_font=mpv-osd
+
+# Button Visual Colors (Hex BGR format for ASS styling):
+# Default accent: vibrant purple/indigo (#6C5CE7 -> ASS BGR 'E75C6C')
+accent_color=5ba3f0
 bg_color=0A0A0A
 text_color=FFFFFF
 hint_color=AAAAAA
 
-# OSD notification on skip:
+# Show brief OSD message upon skipping (yes/no):
 show_osd_message=yes
 osd_message_duration=2.0
+
+# show_colored_segments: master toggle for coloured seekbar segment markers (yes/no).
+# When 'no', no segments are published to the OSC and nothing is drawn on the
+# seekbar. Auto-skip, the manual skip button, and chapter markers are NOT affected.
+# Change colours using jumpskip_intro_color / jumpskip_outro_color in modernz.conf.
+show_colored_segments=yes
+
+# Per-type marker toggles (only consulted while show_colored_segments=yes):
+show_colored_intro_segments=yes
+show_colored_recap_segments=yes
+show_colored_outro_segments=yes
+show_colored_preview_segments=yes
 
 # mark_chapters additionally inserts '<type>' chapter
 # entries at segment boundaries. Note: chapter navigation
 # (PgUp/PgDn) will also stop at these boundaries.
 mark_chapters=yes
 
-# Debug logging to mpv terminal:
+# Enable debug logging in mpv terminal (yes/no):
 debug_mode=no
 ```
 ---
@@ -202,6 +286,9 @@ debug_mode=no
 You can trigger actions externally via `mpv --input-ipc-server` or input bindings:
 - `script-message skip-segment`: Trigger skip for the active segment.
 - `script-message reload-segments`: Re-fetch segment timestamps for current media.
+
+## TO-DO
+- [ ] Add colored segments support to other osc.
 
 ## Contributing
 
