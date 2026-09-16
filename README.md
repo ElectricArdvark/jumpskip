@@ -53,7 +53,9 @@ All color changeable in **modernz.conf**
   - Zero-config title-to-ID fallback lookup via Cinemeta or optional TMDb API.
 - **Fully Configurable**:
   - Fine-tune timing offsets, segment toggles, provider priorities, timeouts, colors, and button positions via `script-opts/jumpskip.conf`.
-
+ **Colored Segments**:
+  - Show skippable segments types directly in the seekbar with diffrent customizable colors
+  `script-opts/modernz.conf`.
 ---
 
 ## Dependencies

@@ -28,10 +28,35 @@ local user_opts = {
     enabled              = true,
     auto_skip            = false,
     auto_skip_countdown  = 0,
+    autoskip_types       = "",
+    skip_button_timeout  = 0,
+    show_colored_segments         = true,
+    show_colored_intro_segments   = true,
+    show_colored_recap_segments   = true,
+    show_colored_outro_segments   = true,
+    show_colored_preview_segments = true,
     skip_intro           = true,
     skip_recap           = true,
     skip_outro           = true,
     skip_preview         = false,
+    -- Per-provider, per-segment-type toggles (yes/no).
+    -- Naming pattern: <provider>_<segment_type>_segment
+    -- Setting one to 'no' prevents that segment type sourced from THAT provider
+    -- from being queued for skipping; the same type from other providers and
+    -- other types from the same provider are unaffected. All default to enabled.
+    -- Unknown providers/types are allowed through (fail-open).
+    theintrodb_intro_segment   = true,
+    theintrodb_recap_segment   = true,
+    theintrodb_outro_segment   = true,
+    theintrodb_preview_segment = true,
+    introdb_intro_segment      = true,
+    introdb_recap_segment      = true,
+    introdb_outro_segment      = true,
+    introdb_preview_segment    = true,
+    skipdb_intro_segment       = true,
+    skipdb_recap_segment       = true,
+    skipdb_outro_segment       = true,
+    skipdb_preview_segment     = true,
     mark_chapters        = true,
     start_offset         = 0.0,
     end_offset           = 0.0,
@@ -89,6 +114,36 @@ local function update_keybind()
     end
 end
 
+local VALID_SEGMENT_TYPES = { intro = true, recap = true, outro = true, preview = true }
+
+local autoskip_type_set     = {}
+local autoskip_types_active = false
+
+local function validate_options()
+    autoskip_type_set     = {}
+    autoskip_types_active = false
+    for token in string.gmatch(tostring(user_opts.autoskip_types or ""), "([^,]+)") do
+        local t = token:match("^%s*(.-)%s*$"):lower()
+        if #t > 0 then
+            if VALID_SEGMENT_TYPES[t] then
+                autoskip_type_set[t]  = true
+                autoskip_types_active = true
+            else
+                log_warn("Ignoring invalid autoskip_types entry '%s' (valid values: intro, recap, outro, preview)", t)
+            end
+        end
+    end
+
+    local timeout = tonumber(user_opts.skip_button_timeout)
+    if timeout == nil then
+        log_warn("Invalid skip_button_timeout value '%s'; using 0 (button stays visible for entire segment)",
+            tostring(user_opts.skip_button_timeout))
+        timeout = 0
+    end
+    if timeout < 0 then timeout = 0 end
+    user_opts.skip_button_timeout = timeout
+end
+
 local function load_configuration()
     options.read_options(user_opts, "jumpskip")
 
@@ -134,6 +189,7 @@ local function load_configuration()
         end
     end
 
+    validate_options()
     update_keybind()
     log_info("Configuration active (keybind: %s, auto_skip: %s, priority: %s)%s",
         tostring(user_opts.keybind), tostring(user_opts.auto_skip), tostring(user_opts.provider_priority),
@@ -219,6 +275,7 @@ local state = {
     mbtn_bound           = false,
     auto_skip_timer      = nil,
     auto_skip_target_time = nil,
+    button_timeout_timer = nil,
     last_time            = nil,
     display_w            = 1920,
     display_h            = 1080,
@@ -727,34 +784,90 @@ local function merge_segment_lists(primary, secondary)
     return result
 end
 
+local function segment_marker_enabled(seg_type)
+    if not user_opts.show_colored_segments then return false end
+    local per_type = user_opts["show_colored_" .. tostring(seg_type) .. "_segments"]
+    if per_type == nil then return true end
+    return per_type
+end
+
 local function publish_segments(segments)
     local published = {}
     for _, seg in ipairs(segments) do
-        table.insert(published, {
-            start   = seg.start_sec,
-            ["end"] = seg.end_sec,
-            kind    = seg.type,
-        })
+        if segment_marker_enabled(seg.type) then
+            table.insert(published, {
+                start   = seg.start_sec,
+                ["end"] = seg.end_sec,
+                kind    = seg.type,
+            })
+        end
     end
     local ok = pcall(mp.set_property_native, "user-data/jumpskip/segments", published)
     if not ok then
         log_debug("user-data properties unavailable (mpv < 0.36); seekbar highlights disabled")
     end
-
-    if user_opts.mark_chapters and #segments > 0 then
-        local chapters = mp.get_property_native("chapter-list") or {}
-        for _, seg in ipairs(segments) do
+if user_opts.mark_chapters then
+    -- Snapshot the pre-jumpskip chapter list once per file, then rebuild from it
+    -- on every publish so chapters for now-hidden segment types are removed
+    -- when options change at runtime (reload-config).
+    if state.base_chapter_list == nil then
+        state.base_chapter_list = mp.get_property_native("chapter-list") or {}
+    end
+    local chapters = {}
+    for _, ch in ipairs(state.base_chapter_list) do
+        table.insert(chapters, ch)
+    end
+    local marked = 0
+    for _, seg in ipairs(segments) do
+        -- Chapters follow the coloured-marker visibility toggles:
+        -- a segment only gets chapter entries if it would also be drawn.
+        if segment_marker_enabled(seg.type) then
             local capitalized_title = seg.type:gsub("^%l", string.upper)
-            
             table.insert(chapters, { title = capitalized_title, time = seg.start_sec })
             table.insert(chapters, { title = capitalized_title, time = seg.end_sec })
+            marked = marked + 1
         end
-        table.sort(chapters, function(a, b) return a.time < b.time end)
-        mp.set_property_native("chapter-list", chapters)
-        log_debug("Inserted %d segment chapter markers", #segments * 2)
     end
+    table.sort(chapters, function(a, b) return a.time < b.time end)
+    mp.set_property_native("chapter-list", chapters)
+    log_debug("Inserted %d segment chapter markers (%d of %d segment(s) marked)",
+        marked * 2, marked, #segments)
+end
 end
 
+
+-- ---------------------------------------------------------------------------
+-- Per-provider, per-segment-type filtering.
+-- Option lookup key: <provider>_<segment_type>_segment (all lowercase),
+-- e.g. skipdb_intro_segment. A value of 'no' drops that segment type from
+-- that provider only. Unknown providers or segment types have no matching
+-- option and are allowed through (fail-open), so new providers or types keep
+-- working even before a toggle exists for them.
+-- ---------------------------------------------------------------------------
+local function provider_segment_allowed(provider, seg_type)
+    if not provider or not seg_type then return true end
+    local key = tostring(provider):lower() .. '_' .. tostring(seg_type):lower() .. '_segment'
+    local enabled = user_opts[key]
+    if enabled == nil then
+        log_debug('No per-provider toggle %s (unknown provider or segment type); allowing segment', key)
+        return true
+    end
+    return enabled == true
+end
+
+local function filter_provider_segments(segs)
+    local filtered = {}
+    for _, seg in ipairs(segs) do
+        if provider_segment_allowed(seg.provider, seg.type) then
+            table.insert(filtered, seg)
+        else
+            log_info('Dropping %s segment from %s (disabled via %s_%s_segment=no)',
+                tostring(seg.type), tostring(seg.provider),
+                tostring(seg.provider):lower(), tostring(seg.type):lower())
+        end
+    end
+    return filtered
+end
 
 local function query_segments_pipeline()
     if not user_opts.enabled then return end
@@ -796,7 +909,9 @@ local function query_segments_pipeline()
                     results[idx] = {
                         name = pname,
                         ok   = ok,
-                        segs = (ok and segs) and segs or {},
+                        -- Apply per-provider/per-type toggles before segments
+                        -- are merged and queued for skipping.
+                        segs = (ok and segs) and filter_provider_segments(segs) or {},
                         err  = err,
                     }
                     pending = pending - 1
@@ -920,7 +1035,7 @@ local function render_skip_button()
     ass:draw_stop()
 
     local main_label = string.format("Skip %s \xe2\x96\xb6", seg.label or "Segment")
-    if user_opts.auto_skip and state.auto_skip_target_time then
+    if state.auto_skip_target_time then
         local remaining = math.max(0, math.ceil(state.auto_skip_target_time - mp.get_time()))
         main_label = string.format("Skip %s (%ds)", seg.label or "Segment", remaining)
     end
@@ -1000,6 +1115,10 @@ perform_skip = function(is_auto)
         state.auto_skip_timer      = nil
         state.auto_skip_target_time = nil
     end
+    if state.button_timeout_timer then
+        state.button_timeout_timer:kill()
+        state.button_timeout_timer = nil
+    end
 
     state.button_visible = false
     state.active_segment = nil
@@ -1016,6 +1135,13 @@ local function set_mbtn_binding(enable)
         state.mbtn_bound = false
         log_debug("MBTN_LEFT skip binding disabled")
     end
+end
+
+local function should_autoskip(seg_type)
+    if autoskip_types_active then
+        return autoskip_type_set[seg_type] == true
+    end
+    return user_opts.auto_skip
 end
 
 local function check_playback_position(current_time)
@@ -1047,7 +1173,7 @@ local function check_playback_position(current_time)
             log_info("Playback entered %s segment (%.2fs - %.2fs)",
                 matched_segment.label, matched_segment.start_sec, matched_segment.end_sec)
 
-            if user_opts.auto_skip then
+            if should_autoskip(matched_segment.type) then
                 if user_opts.auto_skip_countdown > 0 then
                     state.auto_skip_target_time = mp.get_time() + user_opts.auto_skip_countdown
                     if state.auto_skip_timer then state.auto_skip_timer:kill() end
@@ -1069,6 +1195,19 @@ local function check_playback_position(current_time)
                     perform_skip(true)
                     return
                 end
+            elseif user_opts.skip_button_timeout > 0 then
+                if state.button_timeout_timer then state.button_timeout_timer:kill() end
+                state.button_timeout_timer = mp.add_timeout(user_opts.skip_button_timeout, function()
+                    state.button_timeout_timer = nil
+                    if state.button_visible then
+                        state.button_visible = false
+                        state.mouse_hover    = false
+                        set_mbtn_binding(false)
+                        render_skip_button()
+                        log_debug("Skip button hidden after %gs timeout (keybind '%s' still active)",
+                            user_opts.skip_button_timeout, tostring(user_opts.keybind))
+                    end
+                end)
             end
 
             render_skip_button()
@@ -1083,6 +1222,10 @@ local function check_playback_position(current_time)
                 state.auto_skip_timer:kill()
                 state.auto_skip_timer       = nil
                 state.auto_skip_target_time = nil
+            end
+            if state.button_timeout_timer then
+                state.button_timeout_timer:kill()
+                state.button_timeout_timer = nil
             end
             render_skip_button()
         end
@@ -1116,10 +1259,15 @@ local function reset_state()
     state.mouse_hover      = false
     state.segments_loaded  = false
     state.segments         = {}
+    state.base_chapter_list = nil
     set_mbtn_binding(false)
     if state.auto_skip_timer then
         state.auto_skip_timer:kill()
         state.auto_skip_timer = nil
+    end
+    if state.button_timeout_timer then
+        state.button_timeout_timer:kill()
+        state.button_timeout_timer = nil
     end
     if state.overlay then
         state.overlay.data = ""
