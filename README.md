@@ -92,36 +92,20 @@ Download [jumpskip.lua](https://raw.githubusercontent.com/ElectricArdvark/jumpsk
 Create or edit `~~/script-opts/jumpskip.conf`:
 
 ```ini
-# Master toggle for the script (yes/no)
+# Master toggle for the script
 enabled=yes
-
-# Auto-skip behavior:
-# Set to 'yes' to automatically skip segments when entering them without clicking.
-# Set to 'no' to display the on-screen button and wait for user click or keybind.
+# Auto-skip segments
 auto_skip=no
-
-# Auto-skip countdown (in seconds):
-# If auto_skip is enabled and countdown > 0, an on-screen countdown prompt will be
-# displayed before skipping, allowing you to cancel by clicking or seeking away.
-# If set to 0, auto-skip takes effect immediately upon entering the segment.
+# Countdown to auto-skip triggering
 auto_skip_countdown=0
-
-# Segment types to auto-skip (comma-separated):
-# Accepted values: intro, outro, recap, preview, post_credits (whitespace around entries is ignored).
-# - When left EMPTY (default), the global 'auto_skip' option above governs ALL
-#   segment types.
-# - When set (e.g. 'intro,recap'), ONLY the listed types are skipped automatically;
-#   every other detected type shows the manual skip button / keybind prompt instead,
-#   regardless of the 'auto_skip' setting.
-# Invalid entries are ignored with a warning in the mpv log.
+# Segment types to auto-skip(intro, outro, recap, preview, post_credits)
 autoskip_types=
-
-# Skip button timeout (in seconds):
-# Automatically hides the on-screen skip button if it has not been clicked (or the
-# keybind pressed) within this many seconds after it appears.
-# The keybind remains active for the rest of the segment even after the button hides.
-# 0 = button stays visible for the entire segment (default).
+# Countdown to Skip button hiding
 skip_button_timeout=3
+# Keybinding to trigger skip:
+keybind=Tab
+# Minimum segment duration to consider valid:
+min_segment_duration=3.0
 
 # Segment types to detect and allow skipping:
 skip_intro=yes
@@ -131,12 +115,6 @@ skip_preview=yes
 skip_post_credits=yes
 
 # Per-provider, per-segment-type toggles:
-# Set an entry to 'no' to ignore that segment type from that specific provider,
-# while the same type from other providers (and other types from the same
-# provider) continue to work normally.
-# Example: skipdb_intro_segment=no drops intro segments sourced from SkipDB only.
-# Note: these act as an additional filter on top of the global skip_<type>
-# options above; a type disabled globally stays disabled for every provider.
 #TheIntroDB
 theintrodb_intro_segment=yes
 theintrodb_recap_segment=yes
@@ -155,100 +133,63 @@ skipdb_outro_segment=yes
 skipdb_preview_segment=yes
 
 # Timing offsets (in seconds):
-# Adjust segment start and end times to match your media cut.
-# - start_offset: negative value (e.g. -0.5) triggers the prompt/button slightly earlier;
-#   positive value triggers it later.
-# - end_offset: seconds added or subtracted to the jump target timestamp.
 start_offset=0.0
 end_offset=0.0
 
-# Provider priority order (comma-separated):
-# Supported providers: 'theintrodb', 'introdb', 'skipdb'
-# e.g., 'theintrodb,introdb,skipdb' queries TheIntroDB first, then IntroDB, then SkipDB.
-# Omit any provider to exclude it entirely.
+# Provider priority order:
 provider_priority=introdb,theintrodb,skipdb
-
-# Merge providers (yes/no):
-# When enabled, if the primary provider only has an intro but no outro/recap,
-# the script queries the secondary provider to retrieve the missing segment types.
+# Merge providers:
 merge_providers=yes
 
 # Optional API Keys:
-# TheIntroDB API key (Authorization: Bearer <key>)
-# Increases daily rate/usage limits and weights your submissions higher.
+# TheIntroDB API key
 theintrodb_api_key=
-
-# IntroDB API key (X-API-Key: idb_...)
-# Optional for reading segments.
+# IntroDB API key
 introdb_api_key=
-
-# SkipDB API key (Authorization: Bearer skdb_... or X-API-Key: skdb_...)
-# Reading is open (120 req/min); a key is only needed for submitting segments.
+# SkipDB API key 
 skipdb_api_key=
-
-# Optional TMDb API key:
-# Used to resolve media titles to TMDb IDs if the media file lacks an IMDb/TMDb ID.
-# If left blank, Cinemeta's free public catalog lookup is used automatically.
+# TMDb API key:
 tmdb_api_key=
 
-# HTTP network request timeout (in seconds) for curl subprocess:
-request_timeout=8
-
-# Keybinding to trigger skip when within an active segment:
-# e.g. 'Tab', 'Return', 'ctrl+s', 's'
-keybind=Tab
-
-# Minimum segment duration (in seconds) to consider valid:
-min_segment_duration=3.0
-
-# On-Screen Display (OSD) Button Position:
-# Options: 'bottom-right', 'bottom-left', 'top-right', 'top-left'
+# OSD Button Settings:
+# Button Position:
 button_position=bottom-right
-
-# Button Margins (scaled to 1080p base):
+# Button Margins:
 button_margin_x=60
 button_margin_y=120
-
 # Button Dimensions & Font:
 button_width=220
 button_height=56
 button_font_size=24
 button_font=mpv-osd
-
-# Button Visual Colors (Hex BGR format for ASS styling):
-# Default accent: vibrant purple/indigo (#6C5CE7 -> ASS BGR 'E75C6C')
+# Button Visual Colors:
 accent_color=5ba3f0
 bg_color=0A0A0A
 text_color=FFFFFF
 hint_color=AAAAAA
 
-# Show brief OSD message upon skipping (yes/no):
+# OSD message upon skipping:
 show_osd_message=yes
 osd_message_duration=2.0
 
-# show_colored_segments: master toggle for coloured seekbar segment markers (yes/no).
-# When 'no', no segments are published to the OSC and nothing is drawn on the
-# seekbar. Auto-skip, the manual skip button, and chapter markers are NOT affected.
-# Change colours using jumpskip_intro_color / jumpskip_outro_color in modernz.conf.
+# Colored segments:
+# Master toggle for coloured seekbar segment markers
 show_colored_segments=yes
-
-# Per-type marker toggles (only consulted while show_colored_segments=yes):
+# Per-type marker toggles
 show_colored_intro_segments=yes
 show_colored_recap_segments=yes
 show_colored_outro_segments=yes
 show_colored_preview_segments=yes
 show_colored_post_credits_segments=yes
 
-# mark_chapters additionally inserts '<type>' chapter
-# entries at segment boundaries. Note: chapter navigation
-# (PgUp/PgDn) will also stop at these boundaries.
+# Insert segment type as a chapter:
 mark_chapters=yes
-
-# default_chapter_title: generic name for chapters created or restored
-# after a segment when the file has no pre-existing chapters:
+# Name for chapter created:
 default_chapter_title=Chapter
 
-# Enable debug logging in mpv terminal (yes/no):
+# HTTP network request timeout:
+request_timeout=8
+# Enable debug logging in mpv terminal:
 debug_mode=no
 ```
 ---
