@@ -1481,10 +1481,12 @@ local function draw_bar_range(elem_ass, x1, y1, x2, y2, bar_w, radius)
         elem_ass:rect_cw(x1, y1, x2, y2)
         return
     end
-    -- one \\p4 quantisation step; coord() ceil-biases, so exact equality fails
-    local eps = 0.125
+    -- Snap to bar boundaries if within corner radius / quantization threshold
+    local eps = math.max(radius, 1.0)
     local touches_left = x1 <= eps
     local touches_right = x2 >= bar_w - eps
+    if touches_left then x1 = 0 end
+    if touches_right then x2 = bar_w end
     if not touches_left and not touches_right then
         elem_ass:rect_cw(x1, y1, x2, y2)
         return
@@ -1513,6 +1515,11 @@ local function draw_jumpskip_ranges(element, elem_ass)
         local s = tonumber(seg.start) or 0
         local e = tonumber(seg["end"]) or 0
         if e > s and s < state.duration then
+            -- Snap intro starting near 0 and outro ending near video duration
+            if s <= 0.5 then s = 0 end
+            if (seg.kind == "outro" or seg.kind == "post_credits" or state.duration - e <= 2.0) and e >= state.duration - 5.0 then
+                e = state.duration
+            end
             local sx = limit_range(0, bar_w, math.max(0, s) / state.duration * bar_w)
             local ex = limit_range(0, bar_w, math.min(e, state.duration) / state.duration * bar_w)
             if ex > sx then
