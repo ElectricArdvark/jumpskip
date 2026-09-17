@@ -1504,24 +1504,44 @@ local function draw_jumpskip_ranges(element, elem_ass)
     if type(segs) ~= "table" or #segs == 0 or not state.duration or state.duration <= 0 then return end
     local slider_lo = element.layout.slider
     local elem_geo = element.layout.geometry
-    -- Map over the full drawing width, not slider.min/max.ele_pos: those are
-    -- inset by the seek handle radius, which is what left the unfilled sliver
-    -- at t=0 and t=duration. Progress and background already use raw geometry.
+    -- Use the same coordinate system as the progress bar (slider.min/max.ele_pos)
+    -- to align segment highlights with the progress fill and chapter gaps,
+    -- avoiding gaps/artifacts caused by seek_handle_size insetting the slider range.
     local bar_w = elem_geo.w
     local y1 = slider_lo.gap
     local y2 = elem_geo.h - slider_lo.gap
     local radius = slider_lo.radius or 0
+    -- Slider element positions (inset by handle radius when seek_handle_size > 0)
+    local min_ele_pos = element.slider.min.ele_pos
+    local max_ele_pos = element.slider.max.ele_pos
+    local slider_w = max_ele_pos - min_ele_pos
     for _, seg in ipairs(segs) do
         local s = tonumber(seg.start) or 0
         local e = tonumber(seg["end"]) or 0
         if e > s and s < state.duration then
             -- Snap intro starting near 0 and outro ending near video duration
-            if s <= 0.5 then s = 0 end
+            local snapped_start = false
+            local snapped_end = false
+            if s <= 0.5 then
+                s = 0
+                snapped_start = true
+            end
             if (seg.kind == "outro" or seg.kind == "post_credits" or state.duration - e <= 2.0) and e >= state.duration - 5.0 then
                 e = state.duration
+                snapped_end = true
             end
-            local sx = limit_range(0, bar_w, math.max(0, s) / state.duration * bar_w)
-            local ex = limit_range(0, bar_w, math.min(e, state.duration) / state.duration * bar_w)
+            -- Map time to slider element position range (same as progress bar's right edge)
+            local sx = min_ele_pos + (math.max(0, s) / state.duration) * slider_w
+            local ex = min_ele_pos + (math.min(e, state.duration) / state.duration) * slider_w
+            -- For snapped segments at boundaries, align with progress bar visual extent:
+            -- - Intro at t=0: progress bar draws from 0 to min_ele_pos, so segment should start at 0
+            -- - Outro at t=duration: progress bar ends at max_ele_pos, chapter gap at max_ele_pos.
+            --   Extend segment to full bar_w so draw_bar_range applies right radius and meets chapter gap.
+            if snapped_start then sx = 0 end
+            if snapped_end then ex = bar_w end
+            -- Clamp to valid drawing range
+            sx = limit_range(0, bar_w, sx)
+            ex = limit_range(0, bar_w, ex)
             if ex > sx then
                 local color = user_opts["jumpskip_" .. tostring(seg.kind) .. "_color"] or user_opts.jumpskip_intro_color
                 begin_draw_layer(element, elem_ass, color)
