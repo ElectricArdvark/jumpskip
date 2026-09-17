@@ -1,11 +1,13 @@
 --[[
     mpv-skip-segment
     ================
-    A Lua script for mpv that detects and skips segments (intros, recaps, outros/credits, previews)
-    using crowdsourced data from TheIntroDB (api.theintrodb.org), IntroDB (introdb.app), and SkipDB (skipdb.tv).
+    A Lua script for mpv that detects and skips segments (intros, recaps, outros/credits, previews,
+    and movie end-credits/post-credits) using crowdsourced data from TheIntroDB (api.theintrodb.org),
+    IntroDB (introdb.app), and SkipDB (skipdb.tv).
 
     Features:
     - Triple provider support: TheIntroDB (v3 OpenAPI), IntroDB (OpenAPI), and SkipDB (openAPI)
+    - Movie support: IntroDB end-credits (outro) and post-credits segments (is_movie=true)
     - Automatic provider fallback and intelligent segment merging
     - Fully non-blocking asynchronous HTTP requests using curl via mp.command_native_async
     - Interactive on-screen clickable button (Netflix-style) with cursor hover feedback
@@ -35,10 +37,12 @@ local user_opts = {
     show_colored_recap_segments   = true,
     show_colored_outro_segments   = true,
     show_colored_preview_segments = true,
+    show_colored_post_credits_segments = true,
     skip_intro           = true,
     skip_recap           = true,
     skip_outro           = true,
     skip_preview         = false,
+    skip_post_credits    = false,
     -- Per-provider, per-segment-type toggles (yes/no).
     -- Naming pattern: <provider>_<segment_type>_segment
     -- Setting one to 'no' prevents that segment type sourced from THAT provider
@@ -53,6 +57,7 @@ local user_opts = {
     introdb_recap_segment      = true,
     introdb_outro_segment      = true,
     introdb_preview_segment    = true,
+    introdb_post_credits_segment = true,
     skipdb_intro_segment       = true,
     skipdb_recap_segment       = true,
     skipdb_outro_segment       = true,
@@ -114,7 +119,7 @@ local function update_keybind()
     end
 end
 
-local VALID_SEGMENT_TYPES = { intro = true, recap = true, outro = true, preview = true }
+local VALID_SEGMENT_TYPES = { intro = true, recap = true, outro = true, preview = true, post_credits = true }
 
 local autoskip_type_set     = {}
 local autoskip_types_active = false
@@ -123,13 +128,13 @@ local function validate_options()
     autoskip_type_set     = {}
     autoskip_types_active = false
     for token in string.gmatch(tostring(user_opts.autoskip_types or ""), "([^,]+)") do
-        local t = token:match("^%s*(.-)%s*$"):lower()
+        local t = token:match("^%s*(.-)%s*$"):lower():gsub("%-", "_")
         if #t > 0 then
             if VALID_SEGMENT_TYPES[t] then
                 autoskip_type_set[t]  = true
                 autoskip_types_active = true
             else
-                log_warn("Ignoring invalid autoskip_types entry '%s' (valid values: intro, recap, outro, preview)", t)
+                log_warn("Ignoring invalid autoskip_types entry '%s' (valid values: intro, recap, outro, preview, post_credits)", t)
             end
         end
     end
@@ -240,6 +245,20 @@ local function clean_title(raw)
     s = s:gsub("[dD][dD]%+?%s*2%s*0", " ")
     s = s:gsub("%s+", " ")
     return s:match("^%s*(.-)%s*$")
+end
+
+-- Formats a seconds value (fractional allowed) as H:MM:SS: no leading zero on
+-- hours, zero-padded minutes and seconds. nil, non-numeric, NaN, infinite and
+-- negative inputs are clamped to 0:00:00 so logging can never raise.
+local function format_hms(sec)
+    if type(sec) ~= "number" or sec ~= sec or sec == math.huge or sec < 0 then
+        sec = 0
+    end
+    local total   = math.floor(sec)
+    local hours   = math.floor(total / 3600)
+    local minutes = math.floor((total % 3600) / 60)
+    local seconds = total % 60
+    return string.format("%d:%02d:%02d", hours, minutes, seconds)
 end
 
 local function make_segment(seg_type, label, start_sec, end_sec, provider)
@@ -622,13 +641,25 @@ local function query_theintrodb(media_info, current_file_id, callback)
 end
 
 local function query_introdb(media_info, current_file_id, callback)
-    if not media_info.imdb_id or not media_info.season or not media_info.episode then
-        callback(false, nil, "IntroDB requires imdb_id, season, and episode")
+    if not media_info.imdb_id then
+        callback(false, nil, "IntroDB requires imdb_id")
         return
     end
 
-    local url = string.format("https://api.introdb.app/segments?imdb_id=%s&season=%d&episode=%d",
-        media_info.imdb_id, media_info.season, media_info.episode)
+    local is_movie = not media_info.is_tv
+    if not is_movie and (not media_info.season or not media_info.episode) then
+        callback(false, nil, "IntroDB requires season and episode for TV shows")
+        return
+    end
+
+    local url
+    if is_movie then
+        url = string.format("https://api.introdb.app/segments?imdb_id=%s&is_movie=true",
+            media_info.imdb_id)
+    else
+        url = string.format("https://api.introdb.app/segments?imdb_id=%s&season=%d&episode=%d",
+            media_info.imdb_id, media_info.season, media_info.episode)
+    end
     local headers = build_auth_header(user_opts.introdb_api_key, "X-API-Key: ")
 
     async_http_get(url, headers, user_opts.request_timeout, function(success, data, err)
@@ -655,7 +686,12 @@ local function query_introdb(media_info, current_file_id, callback)
 
         if user_opts.skip_intro then add_segment(data.intro,  "intro",  "Intro")  end
         if user_opts.skip_recap then add_segment(data.recap,  "recap",  "Recap")  end
-        if user_opts.skip_outro then add_segment(data.outro,  "outro",  "Outro")  end
+        if user_opts.skip_outro then
+            add_segment(data.outro, "outro", is_movie and "Credits" or "Outro")
+        end
+        if user_opts.skip_post_credits then
+            add_segment(data.post_credits, "post_credits", "Post-Credits")
+        end
 
         log_info("IntroDB returned %d segment(s)", #normalized)
         callback(true, normalized, nil)
@@ -739,8 +775,10 @@ local function log_segments_summary(segments, providers_raw)
             else
                 mp.msg.info(string.format("[jumpskip]   %-16s  %d segment(s):", pname, #psegs))
                 for _, s in ipairs(psegs) do
-                    mp.msg.info(string.format("[jumpskip]     %-10s  %7.2fs -> %7.2fs",
-                        s.label, s.start_sec, s.end_sec))
+                    mp.msg.info(string.format("[jumpskip]     %-10s  %7.2fs (%s) -> %7.2fs (%s)",
+                        s.label,
+                        s.start_sec, format_hms(s.start_sec),
+                        s.end_sec, format_hms(s.end_sec)))
                 end
             end
         end
@@ -753,11 +791,13 @@ local function log_segments_summary(segments, providers_raw)
     end
     mp.msg.info(string.format("[jumpskip] FINAL SEGMENTS: %d total", #segments))
     mp.msg.info("[jumpskip] " .. sep)
-    mp.msg.info(string.format("[jumpskip]   %-10s  %-16s  %7s  %7s", "Type", "Provider", "Start", "End"))
-    mp.msg.info("[jumpskip] " .. string.rep("-", 54))
+    mp.msg.info(string.format("[jumpskip]   %-10s  %-16s  %-20s  %-20s", "Type", "Provider", "Start", "End"))
+    mp.msg.info("[jumpskip] " .. string.rep("-", 74))
     for _, s in ipairs(segments) do
-        mp.msg.info(string.format("[jumpskip]   %-10s  %-16s  %6.2fs  %6.2fs",
-            s.label, s.provider, s.start_sec, s.end_sec))
+        mp.msg.info(string.format("[jumpskip]   %-10s  %-16s  %-20s  %-20s",
+            s.label, s.provider,
+            string.format("%.2fs (%s)", s.start_sec, format_hms(s.start_sec)),
+            string.format("%.2fs (%s)", s.end_sec, format_hms(s.end_sec))))
     end
     mp.msg.info("[jumpskip] " .. sep)
 end
@@ -791,6 +831,25 @@ local function segment_marker_enabled(seg_type)
     return per_type
 end
 
+-- ---------------------------------------------------------------------------
+-- User-visible chapter label for a segment type.
+-- Movies end in credits rather than an episode outro, so 'outro' is surfaced
+-- as "Credits" for movies and "Outro" for episodes. Display-only: seg.type
+-- stays 'outro', so jumpskip_outro_color, auto-skip and the skip button are
+-- unaffected. Every provider inherits this because all chapter titles are
+-- built here.
+-- ---------------------------------------------------------------------------
+local function chapter_title_for_segment(seg_type)
+    local title = tostring(seg_type):gsub("_", " "):gsub("^%l", string.upper)
+    if seg_type == "outro" then
+        local mi = state.media_info
+        if mi and not mi.is_tv then
+            title = "Credits"
+        end
+    end
+    return title
+end
+
 local function publish_segments(segments)
     local published = {}
     for _, seg in ipairs(segments) do
@@ -822,7 +881,8 @@ if user_opts.mark_chapters then
         -- Chapters follow the coloured-marker visibility toggles:
         -- a segment only gets chapter entries if it would also be drawn.
         if segment_marker_enabled(seg.type) then
-            local capitalized_title = seg.type:gsub("^%l", string.upper)
+            -- Central chapter naming: movie outros become "Credits" here.
+            local capitalized_title = chapter_title_for_segment(seg.type)
             table.insert(chapters, { title = capitalized_title, time = seg.start_sec })
             table.insert(chapters, { title = capitalized_title, time = seg.end_sec })
             marked = marked + 1
@@ -1170,8 +1230,10 @@ local function check_playback_position(current_time)
         if state.active_segment ~= matched_segment then
             state.active_segment = matched_segment
             state.button_visible = true
-            log_info("Playback entered %s segment (%.2fs - %.2fs)",
-                matched_segment.label, matched_segment.start_sec, matched_segment.end_sec)
+            log_info("Playback entered %s segment (%.2fs (%s) - %.2fs (%s))",
+                matched_segment.label,
+                matched_segment.start_sec, format_hms(matched_segment.start_sec),
+                matched_segment.end_sec, format_hms(matched_segment.end_sec))
 
             if should_autoskip(matched_segment.type) then
                 if user_opts.auto_skip_countdown > 0 then

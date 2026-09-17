@@ -16,7 +16,7 @@ OSC by [ModernZ](https://github.com/Samillion/ModernZ).
 
 <img width="24" height="24" alt="output-onlinepngtools (2)" src="https://github.com/user-attachments/assets/423b4958-3686-4795-b721-a6bcc3c322b9" /> Outro/Credits
 
-<img width="24" height="24" alt="output-onlinepngtools (3)" src="https://github.com/user-attachments/assets/8e9ba2fd-bceb-4426-a26c-b0c3bbe367bc" /> Preview
+<img width="24" height="24" alt="output-onlinepngtools (3)" src="https://github.com/user-attachments/assets/8e9ba2fd-bceb-4426-a26c-b0c3bbe367bc" /> Preview/Post-Credits
 
 
 All colors changeable in **modernz.conf**
@@ -31,7 +31,7 @@ All colors changeable in **modernz.conf**
 
 - **Multi Provider Integration**:
   - **TheIntroDB** TV and movies.
-  - **IntroDB** TV only.
+  - **IntroDB** TV and movies.
   - **SkipDB** TV and movies.
 - **Intelligent Fallback & Merging**:
   - Configurable provider priority (`theintrodb,introdb,skipdb` or in any order).
@@ -245,9 +245,14 @@ debug_mode=no
 ---
 
 ## TO-DO
+- [x] Add IntroDB movies.
 - [ ] Add Colored segments support to other osc.
 - [ ] Add AniSkip.
 - [ ] Add Per-provider, media type toggles.
+
+## Changelog
+
+Click [Here](https://github.com/ElectricArdvark/jumpskip/wiki/Changelog)
 
 ## Contributing
 

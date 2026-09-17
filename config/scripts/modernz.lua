@@ -160,6 +160,7 @@ local user_opts = {
     jumpskip_recap_color = "#f8bc3a",      -- color of recap segment highlights on the seekbar (jumpskip)
     jumpskip_outro_color = "#e75c6c",      -- color of outro segment highlights on the seekbar (jumpskip)
     jumpskip_preview_color = "#43cb44",    -- color of preview segment highlights on the seekbar (jumpskip)
+    jumpskip_post_credits_color = "#FF6A00", -- color of post-credits segment highlights on the seekbar (jumpskip)
 
     osc_fade_strength = 100,               -- strength of the OSC background fade (0 to disable)
     fade_blur_strength = 100,              -- blur strength for the OSC alpha fade. caution: high values can take a lot of CPU time to render
@@ -1453,6 +1454,47 @@ local function draw_ab_loop_range(element, elem_ass)
     elem_ass:rect_cw(ax, slider_lo.gap, bx, elem_geo.h - slider_lo.gap)
 end
 
+-- Clamp a pair of corner radii so opposing arcs can never cross.
+-- Caps each radius at half the bar's inner height, then scales both down
+-- proportionally when the range is narrower than their sum.
+local function fit_corner_radii(r_left, r_right, width, height)
+    local r_max = height / 2
+    if r_left > r_max then r_left = r_max end
+    if r_right > r_max then r_right = r_max end
+    if r_left < 0 then r_left = 0 end
+    if r_right < 0 then r_right = 0 end
+    local total = r_left + r_right
+    if total > width and total > 0 then
+        local k = width / total
+        r_left = r_left * k
+        r_right = r_right * k
+    end
+    return r_left, r_right
+end
+
+-- Emit a filled range in element-local bar coordinates, rounding only the
+-- edges that actually touch an extremity of the bar: outer side round, inner
+-- side square, matching the convention used by draw_gap_segments().
+local function draw_bar_range(elem_ass, x1, y1, x2, y2, bar_w, radius)
+    if x2 <= x1 then return end
+    if not radius or radius <= 0 then
+        elem_ass:rect_cw(x1, y1, x2, y2)
+        return
+    end
+    -- one \\p4 quantisation step; coord() ceil-biases, so exact equality fails
+    local eps = 0.125
+    local touches_left = x1 <= eps
+    local touches_right = x2 >= bar_w - eps
+    if not touches_left and not touches_right then
+        elem_ass:rect_cw(x1, y1, x2, y2)
+        return
+    end
+    local r_left = touches_left and radius or 0
+    local r_right = touches_right and radius or 0
+    r_left, r_right = fit_corner_radii(r_left, r_right, x2 - x1, y2 - y1)
+    elem_ass:round_rect_cw(x1, y1, x2, y2, r_left, r_right)
+end
+
 -- draw intro/outro segment highlights published by jumpskip.lua (user-data/jumpskip/segments)
 local function draw_jumpskip_ranges(element, elem_ass)
     if element.name ~= "seekbar" then return end
@@ -1460,16 +1502,23 @@ local function draw_jumpskip_ranges(element, elem_ass)
     if type(segs) ~= "table" or #segs == 0 or not state.duration or state.duration <= 0 then return end
     local slider_lo = element.layout.slider
     local elem_geo = element.layout.geometry
+    -- Map over the full drawing width, not slider.min/max.ele_pos: those are
+    -- inset by the seek handle radius, which is what left the unfilled sliver
+    -- at t=0 and t=duration. Progress and background already use raw geometry.
+    local bar_w = elem_geo.w
+    local y1 = slider_lo.gap
+    local y2 = elem_geo.h - slider_lo.gap
+    local radius = slider_lo.radius or 0
     for _, seg in ipairs(segs) do
         local s = tonumber(seg.start) or 0
         local e = tonumber(seg["end"]) or 0
         if e > s and s < state.duration then
-            local sx = get_slider_ele_pos_for(element, math.max(0, s) / state.duration * 100)
-            local ex = get_slider_ele_pos_for(element, math.min(e, state.duration) / state.duration * 100)
+            local sx = limit_range(0, bar_w, math.max(0, s) / state.duration * bar_w)
+            local ex = limit_range(0, bar_w, math.min(e, state.duration) / state.duration * bar_w)
             if ex > sx then
                 local color = user_opts["jumpskip_" .. tostring(seg.kind) .. "_color"] or user_opts.jumpskip_intro_color
                 begin_draw_layer(element, elem_ass, color)
-                elem_ass:rect_cw(sx, slider_lo.gap, ex, elem_geo.h - slider_lo.gap)
+                draw_bar_range(elem_ass, sx, y1, ex, y2, bar_w, radius)
             end
         end
     end
@@ -4505,6 +4554,7 @@ local function validate_user_opts()
         user_opts.windowcontrols_min_hover, user_opts.cache_info_color, user_opts.thumbnail_box_outline, user_opts.nibble_color,
         user_opts.nibble_current_color, user_opts.seek_handle_color, user_opts.ab_loop_color,
         user_opts.jumpskip_intro_color, user_opts.jumpskip_outro_color, user_opts.jumpskip_recap_color, user_opts.jumpskip_preview_color,
+        user_opts.jumpskip_post_credits_color, -- hex-validated alongside the other segment colours
     }
 
     for _, color in pairs(colors) do
