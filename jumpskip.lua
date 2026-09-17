@@ -63,6 +63,7 @@ local user_opts = {
     skipdb_outro_segment       = true,
     skipdb_preview_segment     = true,
     mark_chapters        = true,
+    default_chapter_title = "Chapter",
     start_offset         = 0.0,
     end_offset           = 0.0,
     provider_priority    = "theintrodb,introdb,skipdb",
@@ -850,6 +851,186 @@ local function chapter_title_for_segment(seg_type)
     return title
 end
 
+local function build_marked_chapters(base_chapters, segments, duration, default_title)
+    local EPSILON = 0.05
+    default_title = (default_title and default_title ~= "") and default_title or "Chapter"
+    duration = tonumber(duration) or 0
+
+    -- 1. Snapshot and sort base chapters
+    local original_chapters = {}
+    if type(base_chapters) == "table" then
+        for _, ch in ipairs(base_chapters) do
+            if ch and ch.time then
+                table.insert(original_chapters, {
+                    time  = tonumber(ch.time) or 0,
+                    title = ch.title or "",
+                })
+            end
+        end
+    end
+    table.sort(original_chapters, function(a, b) return a.time < b.time end)
+
+    -- Helper: get original enclosing chapter title at time_pos
+    local function get_original_chapter_title_at(time_pos)
+        if #original_chapters == 0 then return nil end
+        local matched = nil
+        for _, ch in ipairs(original_chapters) do
+            if ch.time <= time_pos + EPSILON then
+                matched = ch.title
+            else
+                break
+            end
+        end
+        return matched
+    end
+
+    -- 2. Filter active segments
+    local active_segs = {}
+    if type(segments) == "table" then
+        for _, seg in ipairs(segments) do
+            if segment_marker_enabled(seg.type) then
+                local s = math.max(0, tonumber(seg.start_sec) or 0)
+                local e = tonumber(seg.end_sec) or 0
+                if duration > 0 and e > duration then
+                    e = duration
+                end
+                if e > s + EPSILON then
+                    table.insert(active_segs, {
+                        start_sec = s,
+                        end_sec   = e,
+                        type      = seg.type,
+                        title     = chapter_title_for_segment(seg.type),
+                    })
+                end
+            end
+        end
+    end
+    table.sort(active_segs, function(a, b) return a.start_sec < b.start_sec end)
+
+    -- If no active segments to mark, return original chapters
+    if #active_segs == 0 then
+        return original_chapters, 0
+    end
+
+    -- Helper: check if t is strictly inside any active segment [s.start_sec + EPS, s.end_sec - EPS]
+    local function is_inside_any_segment(t)
+        for _, s in ipairs(active_segs) do
+            if (s.start_sec + EPSILON) <= t and t < (s.end_sec - EPSILON) then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- Helper: check if another segment starts at t
+    local function another_seg_starts_at(t, current_seg)
+        for _, s in ipairs(active_segs) do
+            if s ~= current_seg and math.abs(s.start_sec - t) < EPSILON then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- Helper: check if an original base chapter starts at t
+    local function original_chapter_starts_at(t)
+        for _, ch in ipairs(original_chapters) do
+            if math.abs(ch.time - t) < EPSILON then
+                return true
+            end
+        end
+        return false
+    end
+
+    -- Helper: check if any segment starts at t
+    local function segment_starts_at(t)
+        for _, s in ipairs(active_segs) do
+            if math.abs(s.start_sec - t) < EPSILON then
+                return s
+            end
+        end
+        return nil
+    end
+
+    local candidate_chapters = {}
+
+    -- 1. Base chapters (retain if not overridden by segment start or swallowed inside a segment)
+    for _, ch in ipairs(original_chapters) do
+        local t = ch.time
+        if not segment_starts_at(t) and not is_inside_any_segment(t) then
+            table.insert(candidate_chapters, {
+                time   = t,
+                title  = ch.title,
+                source = "base",
+                prio   = 2,
+            })
+        end
+    end
+
+    -- 2. Segment starts and ends
+    for _, seg in ipairs(active_segs) do
+        -- Opening boundary for the segment
+        table.insert(candidate_chapters, {
+            time   = seg.start_sec,
+            title  = seg.title,
+            source = "seg_start",
+            prio   = 3,
+        })
+
+        -- Closing boundary for the segment
+        local e = seg.end_sec
+        local skip_closing = false
+        if duration > 0 and e >= duration - EPSILON then
+            skip_closing = true
+        elseif is_inside_any_segment(e) then
+            skip_closing = true
+        elseif another_seg_starts_at(e, seg) then
+            skip_closing = true
+        elseif original_chapter_starts_at(e) then
+            skip_closing = true
+        end
+
+        if not skip_closing then
+            local orig_title = get_original_chapter_title_at(e)
+            local closing_title = (orig_title and orig_title ~= "") and orig_title or default_title
+            table.insert(candidate_chapters, {
+                time   = e,
+                title  = closing_title,
+                source = "seg_end",
+                prio   = 1,
+            })
+        end
+    end
+
+    -- Sort candidates by timestamp ascending, break ties by priority (seg_start > base > seg_end)
+    table.sort(candidate_chapters, function(a, b)
+        if math.abs(a.time - b.time) < EPSILON then
+            return a.prio > b.prio
+        end
+        return a.time < b.time
+    end)
+
+    -- Deduplicate chapters within EPSILON of each other and clamp
+    local deduped = {}
+    for _, ch in ipairs(candidate_chapters) do
+        local t = math.max(0, ch.time)
+        if not (duration > 0 and t >= duration - EPSILON) then
+            if #deduped == 0 then
+                table.insert(deduped, { time = t, title = ch.title })
+            else
+                local last = deduped[#deduped]
+                if math.abs(t - last.time) < EPSILON then
+                    -- Duplicate timestamp within EPSILON; earlier entry had higher priority
+                else
+                    table.insert(deduped, { time = t, title = ch.title })
+                end
+            end
+        end
+    end
+
+    return deduped, #active_segs
+end
+
 local function publish_segments(segments)
     local published = {}
     for _, seg in ipairs(segments) do
@@ -865,34 +1046,30 @@ local function publish_segments(segments)
     if not ok then
         log_debug("user-data properties unavailable (mpv < 0.36); seekbar highlights disabled")
     end
-if user_opts.mark_chapters then
-    -- Snapshot the pre-jumpskip chapter list once per file, then rebuild from it
-    -- on every publish so chapters for now-hidden segment types are removed
-    -- when options change at runtime (reload-config).
-    if state.base_chapter_list == nil then
-        state.base_chapter_list = mp.get_property_native("chapter-list") or {}
-    end
-    local chapters = {}
-    for _, ch in ipairs(state.base_chapter_list) do
-        table.insert(chapters, ch)
-    end
-    local marked = 0
-    for _, seg in ipairs(segments) do
-        -- Chapters follow the coloured-marker visibility toggles:
-        -- a segment only gets chapter entries if it would also be drawn.
-        if segment_marker_enabled(seg.type) then
-            -- Central chapter naming: movie outros become "Credits" here.
-            local capitalized_title = chapter_title_for_segment(seg.type)
-            table.insert(chapters, { title = capitalized_title, time = seg.start_sec })
-            table.insert(chapters, { title = capitalized_title, time = seg.end_sec })
-            marked = marked + 1
+    if user_opts.mark_chapters then
+        -- Snapshot the pre-jumpskip chapter list once per file, then rebuild from it
+        -- on every publish so chapters for now-hidden segment types are removed
+        -- when options change at runtime (reload-config).
+        if state.base_chapter_list == nil then
+            state.base_chapter_list = mp.get_property_native("chapter-list") or {}
         end
+
+        local file_dur = state.duration
+        if not file_dur or file_dur <= 0 then
+            file_dur = mp.get_property_number("duration") or 0
+        end
+
+        local chapters, marked_count = build_marked_chapters(
+            state.base_chapter_list,
+            segments,
+            file_dur,
+            user_opts.default_chapter_title
+        )
+
+        mp.set_property_native("chapter-list", chapters)
+        log_debug("Updated chapter markers (%d segment(s) marked, %d total chapters in chapter-list)",
+            marked_count, #chapters)
     end
-    table.sort(chapters, function(a, b) return a.time < b.time end)
-    mp.set_property_native("chapter-list", chapters)
-    log_debug("Inserted %d segment chapter markers (%d of %d segment(s) marked)",
-        marked * 2, marked, #segments)
-end
 end
 
 

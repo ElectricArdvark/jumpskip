@@ -107,7 +107,7 @@ auto_skip=no
 auto_skip_countdown=0
 
 # Segment types to auto-skip (comma-separated):
-# Accepted values: intro, outro, recap, preview (whitespace around entries is ignored).
+# Accepted values: intro, outro, recap, preview, post_credits (whitespace around entries is ignored).
 # - When left EMPTY (default), the global 'auto_skip' option above governs ALL
 #   segment types.
 # - When set (e.g. 'intro,recap'), ONLY the listed types are skipped automatically;
@@ -128,6 +128,7 @@ skip_intro=yes
 skip_recap=yes
 skip_outro=yes
 skip_preview=yes
+skip_post_credits=yes
 
 # Per-provider, per-segment-type toggles:
 # Set an entry to 'no' to ignore that segment type from that specific provider,
@@ -136,19 +137,22 @@ skip_preview=yes
 # Example: skipdb_intro_segment=no drops intro segments sourced from SkipDB only.
 # Note: these act as an additional filter on top of the global skip_<type>
 # options above; a type disabled globally stays disabled for every provider.
-
+#TheIntroDB
 theintrodb_intro_segment=yes
 theintrodb_recap_segment=yes
 theintrodb_outro_segment=yes
 theintrodb_preview_segment=yes
+#IntroDB
 introdb_intro_segment=yes
 introdb_recap_segment=yes
 introdb_outro_segment=yes
 introdb_preview_segment=yes
+introdb_post_credits_segment=yes
+#SkipDB
 skipdb_intro_segment=yes
 skipdb_recap_segment=yes
 skipdb_outro_segment=yes
-skipdb_preview_segment=no
+skipdb_preview_segment=yes
 
 # Timing offsets (in seconds):
 # Adjust segment start and end times to match your media cut.
@@ -233,11 +237,16 @@ show_colored_intro_segments=yes
 show_colored_recap_segments=yes
 show_colored_outro_segments=yes
 show_colored_preview_segments=yes
+show_colored_post_credits_segments=yes
 
 # mark_chapters additionally inserts '<type>' chapter
 # entries at segment boundaries. Note: chapter navigation
 # (PgUp/PgDn) will also stop at these boundaries.
 mark_chapters=yes
+
+# default_chapter_title: generic name for chapters created or restored
+# after a segment when the file has no pre-existing chapters:
+default_chapter_title=Chapter
 
 # Enable debug logging in mpv terminal (yes/no):
 debug_mode=no
