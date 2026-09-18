@@ -114,7 +114,13 @@ skip_outro=yes
 skip_preview=yes
 skip_post_credits=yes
 
-# Per-provider, per-segment-type toggles:
+# Provider options:
+# Provider priority order (TV shows and movies)
+provider_priority=introdb,theintrodb,skipdb
+# Media-type-specific provider priority (optional)
+provider_priority_tvshow=
+provider_priority_movie=
+# Per-provider, per-segment-type toggles
 #TheIntroDB
 theintrodb_intro_segment=yes
 theintrodb_recap_segment=yes
@@ -135,9 +141,6 @@ skipdb_preview_segment=yes
 # Timing offsets (in seconds):
 start_offset=0.0
 end_offset=0.0
-
-# Provider priority order:
-provider_priority=introdb,theintrodb,skipdb
 # Merge providers:
 merge_providers=yes
 
@@ -196,9 +199,10 @@ debug_mode=no
 
 ## TO-DO
 - [x] Add IntroDB movies.
-- [ ] Add Colored segments support to other osc.
+- [x] Add Per-provider, media type priority.
 - [ ] Add AniSkip.
-- [ ] Add Per-provider, media type toggles.
+- [ ] Add Colored segments support to other osc.
+- [ ] Add Per-provider, specific TV show / Movie priority.
 
 ## Changelog
 

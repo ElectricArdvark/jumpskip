@@ -1,5 +1,6 @@
 --[[
     mpv-skip-segment
+    Version 1.5
     ================
     A Lua script for mpv that detects and skips segments (intros, recaps, outros/credits, previews,
     and movie end-credits/post-credits) using crowdsourced data from TheIntroDB (api.theintrodb.org),
@@ -67,6 +68,8 @@ local user_opts = {
     start_offset         = 0.0,
     end_offset           = 0.0,
     provider_priority    = "theintrodb,introdb,skipdb",
+    provider_priority_tvshow = "",
+    provider_priority_movie = "",
     merge_providers      = true,
     theintrodb_api_key   = "",
     introdb_api_key      = "",
@@ -124,6 +127,26 @@ local VALID_SEGMENT_TYPES = { intro = true, recap = true, outro = true, preview 
 
 local autoskip_type_set     = {}
 local autoskip_types_active = false
+
+local VALID_PROVIDERS = { theintrodb = true, introdb = true, skipdb = true }
+
+local function parse_provider_priority(priority_str)
+    local providers = {}
+    if not priority_str or #priority_str == 0 then
+        return providers
+    end
+    for token in string.gmatch(priority_str, "([^,%s]+)") do
+        local p = token:match("^%s*(.-)%s*$"):lower()
+        if #p > 0 then
+            if VALID_PROVIDERS[p] then
+                table.insert(providers, p)
+            else
+                log_warn("Ignoring unknown provider '%s' in priority list (valid: theintrodb, introdb, skipdb)", p)
+            end
+        end
+    end
+    return providers
+end
 
 local function validate_options()
     autoskip_type_set     = {}
@@ -1106,6 +1129,31 @@ local function filter_provider_segments(segs)
     return filtered
 end
 
+local function get_provider_priority(media_info)
+    -- Determine which priority list to use based on media type
+    local priority_str
+    if media_info.is_tv then
+        priority_str = user_opts.provider_priority_tvshow
+    else
+        priority_str = user_opts.provider_priority_movie
+    end
+
+    -- Fall back to flat provider_priority if media-type-specific option is not set
+    if not priority_str or #priority_str == 0 then
+        priority_str = user_opts.provider_priority
+    end
+
+    -- Parse and validate the priority list
+    local providers = parse_provider_priority(priority_str)
+
+    -- Fall back to hardcoded default if no valid providers found
+    if #providers == 0 then
+        providers = { "theintrodb", "introdb", "skipdb" }
+    end
+
+    return providers
+end
+
 local function query_segments_pipeline()
     if not user_opts.enabled then return end
 
@@ -1117,17 +1165,13 @@ local function query_segments_pipeline()
     local media_info = state.media_info
     if not media_info then return end
 
-    local providers = {}
-    for p in string.gmatch(user_opts.provider_priority:lower(), "([^,%s]+)") do
-        if provider_fns[p] then
-            table.insert(providers, p)
-        end
-    end
-    if #providers == 0 then
-        providers = { "theintrodb", "introdb", "skipdb" }
-    end
+    local providers = get_provider_priority(media_info)
 
-    log_info("Querying segment timestamps from %d provider(s): %s...", #providers, table.concat(providers, " -> "))
+    -- Expose resolved provider order via script messaging for debugging
+    local media_type = media_info.is_tv and "tvshow" or "movie"
+    mp.commandv("script-message", "jumpskip-provider-order", media_type, table.concat(providers, ","))
+
+    log_info("Querying segment timestamps from %d provider(s) [%s]: %s...", #providers, media_type, table.concat(providers, " -> "))
 
     resolve_title_to_imdb(media_info, current_file_id, function(id_found)
         if state.file_id ~= current_file_id then return end
