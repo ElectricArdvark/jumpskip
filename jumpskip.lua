@@ -33,6 +33,12 @@ local user_opts = {
     auto_skip_countdown  = 0,
     autoskip_types       = "",
     skip_button_timeout  = 0,
+    -- Comma-separated list of folder names to restrict processing to.
+    -- When non-empty, only videos whose containing folder name matches one of
+    -- the listed names (case-insensitive, compared against the folder's full
+    -- path) are processed; all other videos are left untouched. Whitespace
+    -- around commas is ignored. When empty or unset, every video is processed.
+    skip_directories      = "",
     show_colored_segments         = true,
     show_colored_intro_segments   = true,
     show_colored_recap_segments   = true,
@@ -1559,6 +1565,78 @@ local function reset_state()
     pcall(function() mp.del_property("user-data/jumpskip/segments") end)
 end
 
+-- Decodes percent-encoded sequences (e.g. %20 -> space) in a path, as mpv may
+-- return file:// URLs with encoded characters.
+local function url_decode(s)
+    if not s then return s end
+    return (s:gsub("%%(%x%x)", function(hex)
+        return string.char(tonumber(hex, 16))
+    end))
+end
+
+-- Returns true when the current file should be processed, based on the
+-- skip_directories filter. When the filter is empty/unset, every video is
+-- allowed. Each comma-separated entry selects a matching mode:
+--   * Bare name (no leading '\' or '/'): match the immediate parent folder
+--     name of the loaded file, case-insensitively.
+--   * Leading '\' or '/' (path fragment): match the fragment anywhere within
+--     the file's full normalized path, case-insensitively and anchored on
+--     path-separator boundaries (so '\Movies' does not match 'MyMovies').
+-- The file is allowed if any entry matches.
+local function is_directory_allowed(path)
+    local filter = user_opts.skip_directories or ""
+    if #filter == 0 then
+        return true
+    end
+    if not path or #path == 0 then
+        return false
+    end
+    -- Strip a file:// scheme prefix and URL-decode the remainder.
+    local clean = path:gsub("^file://", "")
+    clean = url_decode(clean)
+    -- Normalise separators so matching is consistent, and lowercase for
+    -- case-insensitive comparison.
+    local norm = clean:gsub("\\", "/"):lower()
+    -- Drop the trailing filename to obtain the directory portion.
+    local dir = norm:match("^(.*)/[^/]*$")
+    local folder = nil
+    if dir then
+        folder = dir:match("([^/]+)/?$")
+        if folder then folder = folder:lower() end
+    end
+
+    -- Parse the comma-separated filter list (trimming whitespace around entries).
+    local allowed = {}
+    for entry in filter:gmatch("[^,]+") do
+        local name = entry:match("^%s*(.-)%s*$")
+        if name and #name > 0 then
+            allowed[#allowed + 1] = name
+        end
+    end
+    log_debug("skip_directories: resolved folder='%s' filter={%s}",
+        folder or "(none)", table.concat(allowed, ", "))
+
+    -- Wrap the normalized path in separators so segment-boundary matching works.
+    local wrapped = "/" .. norm .. "/"
+    for _, entry in ipairs(allowed) do
+        -- A leading '\' or '/' selects full-path (fragment) mode.
+        local fragment = entry:match("^[\\/](.*)$")
+        if fragment then
+            -- Normalize remaining backslashes to slashes and trim trailing slashes.
+            fragment = fragment:gsub("\\", "/"):gsub("/+$", ""):lower()
+            if #fragment > 0 and string.find(wrapped, "/" .. fragment .. "/", 1, true) then
+                return true
+            end
+        else
+            -- Bare name mode: match the immediate parent folder name.
+            if folder and entry:lower() == folder then
+                return true
+            end
+        end
+    end
+    return false
+end
+
 local function on_file_loaded()
     load_configuration()
     reset_state()
@@ -1566,6 +1644,12 @@ local function on_file_loaded()
     state.filename   = mp.get_property("filename")
     state.duration   = mp.get_property_number("duration") or 0
     state.media_info = extract_media_metadata()
+    -- Directory filter: when skip_directories is set, only process videos whose
+    -- containing folder matches one of the listed names; otherwise skip entirely.
+    if not is_directory_allowed(state.path) then
+        log_debug("Skipping file (folder not in skip_directories): %s", state.path)
+        return
+    end
     query_segments_pipeline()
 end
 
