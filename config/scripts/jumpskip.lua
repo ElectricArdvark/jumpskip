@@ -33,12 +33,8 @@ local user_opts = {
     auto_skip_countdown  = 0,
     autoskip_types       = "",
     skip_button_timeout  = 0,
-    -- Comma-separated list of folder names to restrict processing to.
-    -- When non-empty, only videos whose containing folder name matches one of
-    -- the listed names (case-insensitive, compared against the folder's full
-    -- path) are processed; all other videos are left untouched. Whitespace
-    -- around commas is ignored. When empty or unset, every video is processed.
-    skip_directories      = "",
+
+    filter_directories      = "",
     show_colored_segments         = true,
     show_colored_intro_segments   = true,
     show_colored_recap_segments   = true,
@@ -50,12 +46,7 @@ local user_opts = {
     skip_outro           = true,
     skip_preview         = false,
     skip_post_credits    = false,
-    -- Per-provider, per-segment-type toggles (yes/no).
-    -- Naming pattern: <provider>_<segment_type>_segment
-    -- Setting one to 'no' prevents that segment type sourced from THAT provider
-    -- from being queued for skipping; the same type from other providers and
-    -- other types from the same provider are unaffected. All default to enabled.
-    -- Unknown providers/types are allowed through (fail-open).
+
     theintrodb_intro_segment   = true,
     theintrodb_recap_segment   = true,
     theintrodb_outro_segment   = true,
@@ -277,9 +268,6 @@ local function clean_title(raw)
     return s:match("^%s*(.-)%s*$")
 end
 
--- Formats a seconds value (fractional allowed) as H:MM:SS: no leading zero on
--- hours, zero-padded minutes and seconds. nil, non-numeric, NaN, infinite and
--- negative inputs are clamped to 0:00:00 so logging can never raise.
 local function format_hms(sec)
     if type(sec) ~= "number" or sec ~= sec or sec == math.huge or sec < 0 then
         sec = 0
@@ -861,14 +849,6 @@ local function segment_marker_enabled(seg_type)
     return per_type
 end
 
--- ---------------------------------------------------------------------------
--- User-visible chapter label for a segment type.
--- Movies end in credits rather than an episode outro, so 'outro' is surfaced
--- as "Credits" for movies and "Outro" for episodes. Display-only: seg.type
--- stays 'outro', so jumpskip_outro_color, auto-skip and the skip button are
--- unaffected. Every provider inherits this because all chapter titles are
--- built here.
--- ---------------------------------------------------------------------------
 local function chapter_title_for_segment(seg_type)
     local title = tostring(seg_type):gsub("_", " "):gsub("^%l", string.upper)
     if seg_type == "outro" then
@@ -885,7 +865,6 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
     default_title = (default_title and default_title ~= "") and default_title or "Chapter"
     duration = tonumber(duration) or 0
 
-    -- 1. Snapshot and sort base chapters
     local original_chapters = {}
     if type(base_chapters) == "table" then
         for _, ch in ipairs(base_chapters) do
@@ -899,7 +878,6 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
     end
     table.sort(original_chapters, function(a, b) return a.time < b.time end)
 
-    -- Helper: get original enclosing chapter title at time_pos
     local function get_original_chapter_title_at(time_pos)
         if #original_chapters == 0 then return nil end
         local matched = nil
@@ -913,7 +891,6 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
         return matched
     end
 
-    -- 2. Filter active segments
     local active_segs = {}
     if type(segments) == "table" then
         for _, seg in ipairs(segments) do
@@ -936,12 +913,10 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
     end
     table.sort(active_segs, function(a, b) return a.start_sec < b.start_sec end)
 
-    -- If no active segments to mark, return original chapters
     if #active_segs == 0 then
         return original_chapters, 0
     end
 
-    -- Helper: check if t is strictly inside any active segment [s.start_sec + EPS, s.end_sec - EPS]
     local function is_inside_any_segment(t)
         for _, s in ipairs(active_segs) do
             if (s.start_sec + EPSILON) <= t and t < (s.end_sec - EPSILON) then
@@ -951,7 +926,6 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
         return false
     end
 
-    -- Helper: check if another segment starts at t
     local function another_seg_starts_at(t, current_seg)
         for _, s in ipairs(active_segs) do
             if s ~= current_seg and math.abs(s.start_sec - t) < EPSILON then
@@ -961,7 +935,6 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
         return false
     end
 
-    -- Helper: check if an original base chapter starts at t
     local function original_chapter_starts_at(t)
         for _, ch in ipairs(original_chapters) do
             if math.abs(ch.time - t) < EPSILON then
@@ -971,7 +944,6 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
         return false
     end
 
-    -- Helper: check if any segment starts at t
     local function segment_starts_at(t)
         for _, s in ipairs(active_segs) do
             if math.abs(s.start_sec - t) < EPSILON then
@@ -983,7 +955,6 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
 
     local candidate_chapters = {}
 
-    -- 1. Base chapters (retain if not overridden by segment start or swallowed inside a segment)
     for _, ch in ipairs(original_chapters) do
         local t = ch.time
         if not segment_starts_at(t) and not is_inside_any_segment(t) then
@@ -996,9 +967,8 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
         end
     end
 
-    -- 2. Segment starts and ends
     for _, seg in ipairs(active_segs) do
-        -- Opening boundary for the segment
+
         table.insert(candidate_chapters, {
             time   = seg.start_sec,
             title  = seg.title,
@@ -1006,7 +976,6 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
             prio   = 3,
         })
 
-        -- Closing boundary for the segment
         local e = seg.end_sec
         local skip_closing = false
         if duration > 0 and e >= duration - EPSILON then
@@ -1031,7 +1000,6 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
         end
     end
 
-    -- Sort candidates by timestamp ascending, break ties by priority (seg_start > base > seg_end)
     table.sort(candidate_chapters, function(a, b)
         if math.abs(a.time - b.time) < EPSILON then
             return a.prio > b.prio
@@ -1039,7 +1007,6 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
         return a.time < b.time
     end)
 
-    -- Deduplicate chapters within EPSILON of each other and clamp
     local deduped = {}
     for _, ch in ipairs(candidate_chapters) do
         local t = math.max(0, ch.time)
@@ -1049,7 +1016,7 @@ local function build_marked_chapters(base_chapters, segments, duration, default_
             else
                 local last = deduped[#deduped]
                 if math.abs(t - last.time) < EPSILON then
-                    -- Duplicate timestamp within EPSILON; earlier entry had higher priority
+
                 else
                     table.insert(deduped, { time = t, title = ch.title })
                 end
@@ -1076,9 +1043,7 @@ local function publish_segments(segments)
         log_debug("user-data properties unavailable (mpv < 0.36); seekbar highlights disabled")
     end
     if user_opts.mark_chapters then
-        -- Snapshot the pre-jumpskip chapter list once per file, then rebuild from it
-        -- on every publish so chapters for now-hidden segment types are removed
-        -- when options change at runtime (reload-config).
+
         if state.base_chapter_list == nil then
             state.base_chapter_list = mp.get_property_native("chapter-list") or {}
         end
@@ -1101,15 +1066,6 @@ local function publish_segments(segments)
     end
 end
 
-
--- ---------------------------------------------------------------------------
--- Per-provider, per-segment-type filtering.
--- Option lookup key: <provider>_<segment_type>_segment (all lowercase),
--- e.g. skipdb_intro_segment. A value of 'no' drops that segment type from
--- that provider only. Unknown providers or segment types have no matching
--- option and are allowed through (fail-open), so new providers or types keep
--- working even before a toggle exists for them.
--- ---------------------------------------------------------------------------
 local function provider_segment_allowed(provider, seg_type)
     if not provider or not seg_type then return true end
     local key = tostring(provider):lower() .. '_' .. tostring(seg_type):lower() .. '_segment'
@@ -1136,7 +1092,7 @@ local function filter_provider_segments(segs)
 end
 
 local function get_provider_priority(media_info)
-    -- Determine which priority list to use based on media type
+
     local priority_str
     if media_info.is_tv then
         priority_str = user_opts.provider_priority_tvshow
@@ -1144,9 +1100,6 @@ local function get_provider_priority(media_info)
         priority_str = user_opts.provider_priority_movie
     end
 
-    -- Parse and validate the priority list. If the media-type-specific list is
-    -- empty, no providers are returned, so no segments are queried for that
-    -- media type.
     return parse_provider_priority(priority_str)
 end
 
@@ -1163,8 +1116,6 @@ local function query_segments_pipeline()
 
     local providers = get_provider_priority(media_info)
 
-    -- If no providers are configured for this media type, do not query any
-    -- segments (e.g. provider_priority_movie= empty means movies are skipped).
     if #providers == 0 then
         state.segments_loaded    = true
         state.query_in_progress  = false
@@ -1173,7 +1124,6 @@ local function query_segments_pipeline()
         return
     end
 
-    -- Expose resolved provider order via script messaging for debugging
     local media_type = media_info.is_tv and "tvshow" or "movie"
     mp.commandv("script-message", "jumpskip-provider-order", media_type, table.concat(providers, ","))
 
@@ -1196,8 +1146,7 @@ local function query_segments_pipeline()
                     results[idx] = {
                         name = pname,
                         ok   = ok,
-                        -- Apply per-provider/per-type toggles before segments
-                        -- are merged and queued for skipping.
+
                         segs = (ok and segs) and filter_provider_segments(segs) or {},
                         err  = err,
                     }
@@ -1565,8 +1514,6 @@ local function reset_state()
     pcall(function() mp.del_property("user-data/jumpskip/segments") end)
 end
 
--- Decodes percent-encoded sequences (e.g. %20 -> space) in a path, as mpv may
--- return file:// URLs with encoded characters.
 local function url_decode(s)
     if not s then return s end
     return (s:gsub("%%(%x%x)", function(hex)
@@ -1574,82 +1521,147 @@ local function url_decode(s)
     end))
 end
 
--- Returns true when the current file should be processed, based on the
--- skip_directories filter. When the filter is empty/unset, every video is
--- allowed. Each comma-separated entry selects a matching mode:
---   * Bare name (no leading '\' or '/'): match the immediate parent folder
---     name of the loaded file, case-insensitively.
---   * Leading '\' or '/' (path fragment): match the fragment anywhere within
---     the file's full normalized path, case-insensitively and anchored on
---     path-separator boundaries (so '\Movies' does not match 'MyMovies').
--- The file is allowed if any entry matches.
+local function normalize_absolute_path(path)
+    if not path or #path == 0 then
+        return nil
+    end
+
+    local clean = path:gsub("^file://localhost", ""):gsub("^file://", "")
+    clean = url_decode(clean)
+
+    clean = clean:gsub("^/([a-zA-Z]:)", "%1")
+
+    local norm = nil
+    pcall(function()
+        norm = mp.command_native({"normalize-path", clean})
+    end)
+    if not norm or #norm == 0 then
+        local is_abs = clean:match("^[a-zA-Z]:") or clean:match("^[\\/]")
+        if not is_abs then
+            local work_dir = mp.get_property("working-directory")
+            if not work_dir or #work_dir == 0 then
+                pcall(function() work_dir = utils.getcwd() end)
+            end
+            if work_dir and #work_dir > 0 then
+                clean = utils.join_path(work_dir, clean)
+            end
+        end
+        norm = clean
+    end
+
+    norm = norm:gsub("\\", "/"):gsub("^/([a-zA-Z]:)", "%1")
+    return norm:lower()
+end
+
 local function is_directory_allowed(path)
-    local filter = user_opts.skip_directories or ""
+    local filter = user_opts.filter_directories or ""
     if #filter == 0 then
         return true
     end
     if not path or #path == 0 then
-        return false
+        return false, "empty path"
     end
-    -- Strip a file:// scheme prefix and URL-decode the remainder.
-    local clean = path:gsub("^file://", "")
-    clean = url_decode(clean)
-    -- Normalise separators so matching is consistent, and lowercase for
-    -- case-insensitive comparison.
-    local norm = clean:gsub("\\", "/"):lower()
-    -- Drop the trailing filename to obtain the directory portion.
+
+    local norm = normalize_absolute_path(path)
+    if not norm then
+        return false, "failed to normalize path"
+    end
+
     local dir = norm:match("^(.*)/[^/]*$")
     local folder = nil
     if dir then
         folder = dir:match("([^/]+)/?$")
-        if folder then folder = folder:lower() end
+
+        if folder and folder:match("^[a-zA-Z]:$") then
+            folder = nil
+        end
     end
 
-    -- Parse the comma-separated filter list (trimming whitespace around entries).
-    local allowed = {}
+    local wrapped_dir = nil
+    if dir and #dir > 0 then
+        local trimmed_dir = dir:gsub("^/+", ""):gsub("/+$", "")
+        wrapped_dir = "/" .. trimmed_dir .. "/"
+    end
+
+    local exclusions = {}
+    local inclusions = {}
+
     for entry in filter:gmatch("[^,]+") do
-        local name = entry:match("^%s*(.-)%s*$")
-        if name and #name > 0 then
-            allowed[#allowed + 1] = name
-        end
-    end
-    log_debug("skip_directories: resolved folder='%s' filter={%s}",
-        folder or "(none)", table.concat(allowed, ", "))
+        local raw = entry:match("^%s*(.-)%s*$")
+        if raw and #raw > 0 then
+            local is_exclusion = raw:find("%*") ~= nil
+            local is_fragment  = raw:find("[\\/]") ~= nil
+            local clean        = raw:gsub("%*", "")
 
-    -- Wrap the normalized path in separators so segment-boundary matching works.
-    local wrapped = "/" .. norm .. "/"
-    for _, entry in ipairs(allowed) do
-        -- A leading '\' or '/' selects full-path (fragment) mode.
-        local fragment = entry:match("^[\\/](.*)$")
-        if fragment then
-            -- Normalize remaining backslashes to slashes and trim trailing slashes.
-            fragment = fragment:gsub("\\", "/"):gsub("/+$", ""):lower()
-            if #fragment > 0 and string.find(wrapped, "/" .. fragment .. "/", 1, true) then
-                return true
-            end
-        else
-            -- Bare name mode: match the immediate parent folder name.
-            if folder and entry:lower() == folder then
-                return true
+            if is_fragment then
+                clean = clean:gsub("^[\\/]+", ""):gsub("\\", "/"):gsub("/+$", ""):match("^%s*(.-)%s*$"):lower()
+                if #clean > 0 then
+                    local rule = { mode = "fragment", pattern = clean, raw = raw }
+                    if is_exclusion then
+                        exclusions[#exclusions + 1] = rule
+                    else
+                        inclusions[#inclusions + 1] = rule
+                    end
+                end
+            else
+                clean = clean:match("^%s*(.-)%s*$"):lower()
+                if #clean > 0 then
+                    local rule = { mode = "parent", pattern = clean, raw = raw }
+                    if is_exclusion then
+                        exclusions[#exclusions + 1] = rule
+                    else
+                        inclusions[#inclusions + 1] = rule
+                    end
+                end
             end
         end
     end
-    return false
+
+    local function rule_matches(rule)
+        if rule.mode == "parent" then
+            return folder and (folder == rule.pattern)
+        elseif rule.mode == "fragment" then
+            return wrapped_dir and string.find(wrapped_dir, "/" .. rule.pattern .. "/", 1, true) ~= nil
+        end
+        return false
+    end
+
+    for _, rule in ipairs(exclusions) do
+        if rule_matches(rule) then
+            log_debug("filter_directories: file '%s' matched exclusion rule '%s' -> skipping", path, rule.raw)
+            return false, "matched exclusion rule '" .. rule.raw .. "'"
+        end
+    end
+
+    if #inclusions == 0 then
+        return true
+    end
+
+    for _, rule in ipairs(inclusions) do
+        if rule_matches(rule) then
+            log_debug("filter_directories: file '%s' matched inclusion rule '%s' -> allowed", path, rule.raw)
+            return true
+        end
+    end
+
+    log_debug("filter_directories: file '%s' did not match any inclusion rules -> skipping", path)
+    return false, "folder not in filter_directories inclusions"
 end
 
 local function on_file_loaded()
     load_configuration()
     reset_state()
-    state.path       = mp.get_property("path")
-    state.filename   = mp.get_property("filename")
-    state.duration   = mp.get_property_number("duration") or 0
-    state.media_info = extract_media_metadata()
-    -- Directory filter: when skip_directories is set, only process videos whose
-    -- containing folder matches one of the listed names; otherwise skip entirely.
-    if not is_directory_allowed(state.path) then
-        log_debug("Skipping file (folder not in skip_directories): %s", state.path)
+    state.path     = mp.get_property("path")
+    state.filename = mp.get_property("filename")
+
+    local allowed, reason = is_directory_allowed(state.path)
+    if not allowed then
+        log_debug("Skipping file (%s): %s", reason or "excluded by filter_directories", state.path or "(none)")
         return
     end
+
+    state.duration   = mp.get_property_number("duration") or 0
+    state.media_info = extract_media_metadata()
     query_segments_pipeline()
 end
 

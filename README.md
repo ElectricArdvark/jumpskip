@@ -94,8 +94,8 @@ Create or edit `~~/script-opts/jumpskip.conf`:
 ```ini
 # Master toggle for the script
 enabled=yes
-# Directory filter
-skip_directories=
+# Directory filter (inclusion & exclusion)
+filter_directories=
 # Auto-skip segments
 auto_skip=no
 # Countdown to auto-skip triggering
