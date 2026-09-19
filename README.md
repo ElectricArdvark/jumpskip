@@ -5,7 +5,7 @@ A powerful, lightweight Lua script for **MPV** that detects and skips media segm
 OSC by [ModernZ](https://github.com/Samillion/ModernZ).
 
 <img width="1920" height="1080" alt="Screenshot (123)" src="https://github.com/user-attachments/assets/56985e56-e17a-4786-a118-e9de9c653bee" />
-<img width="1920" height="1080" alt="Screenshot (124)" src="https://github.com/user-attachments/assets/d17be605-5bd0-469b-a948-306f1d72fd32" />
+<img width="1920" height="1080" alt="Screenshot (127)" src="https://github.com/user-attachments/assets/409d74c4-fcfe-4b03-8c02-0f42351268c1" />
 
 > [!IMPORTANT]
 > **Colored Segments work only using a modified ModernZ** [Guide](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments).
@@ -22,6 +22,8 @@ OSC by [ModernZ](https://github.com/Samillion/ModernZ).
 All colors changeable in **modernz.conf**
 
 ---
+> [!NOTE]
+> ### You can check quarried segments in **Console**.
 
 ### My [MPV Config](https://github.com/ElectricArdvark/jumpskip/wiki/MPV-Config)
 
@@ -199,10 +201,9 @@ debug_mode=no
 
 ## TO-DO
 - [x] Add IntroDB movies.
-- [x] Add Per-provider, media type priority.
+- [x] Add Per-media type, provider priority.
 - [ ] Add AniSkip.
 - [ ] Add Colored segments support to other osc.
-- [ ] Add Per-provider, specific TV show / Movie priority.
 
 ## Changelog
 
