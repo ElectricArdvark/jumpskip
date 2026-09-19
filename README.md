@@ -94,6 +94,8 @@ Create or edit `~~/script-opts/jumpskip.conf`:
 ```ini
 # Master toggle for the script
 enabled=yes
+# Directory filter
+skip_directories=
 # Auto-skip segments
 auto_skip=no
 # Countdown to auto-skip triggering
@@ -115,11 +117,9 @@ skip_preview=yes
 skip_post_credits=yes
 
 # Provider options:
-# Provider priority order (TV shows and movies)
-provider_priority=introdb,theintrodb,skipdb
-# Media-type-specific provider priority (optional)
-provider_priority_tvshow=
-provider_priority_movie=
+# Per-media-type provider priority
+provider_priority_tvshow=introdb,theintrodb,skipdb
+provider_priority_movie=introdb,theintrodb,skipdb
 # Per-provider, per-segment-type toggles
 #TheIntroDB
 theintrodb_intro_segment=yes

@@ -73,7 +73,6 @@ local user_opts = {
     default_chapter_title = "Chapter",
     start_offset         = 0.0,
     end_offset           = 0.0,
-    provider_priority    = "theintrodb,introdb,skipdb",
     provider_priority_tvshow = "",
     provider_priority_movie = "",
     merge_providers      = true,
@@ -226,8 +225,9 @@ local function load_configuration()
 
     validate_options()
     update_keybind()
-    log_info("Configuration active (keybind: %s, auto_skip: %s, priority: %s)%s",
-        tostring(user_opts.keybind), tostring(user_opts.auto_skip), tostring(user_opts.provider_priority),
+    log_info("Configuration active (keybind: %s, auto_skip: %s, tv_priority: %s, movie_priority: %s)%s",
+        tostring(user_opts.keybind), tostring(user_opts.auto_skip),
+        tostring(user_opts.provider_priority_tvshow), tostring(user_opts.provider_priority_movie),
         loaded_from and (" [source: " .. loaded_from .. "]") or "")
 end
 
@@ -1144,20 +1144,10 @@ local function get_provider_priority(media_info)
         priority_str = user_opts.provider_priority_movie
     end
 
-    -- Fall back to flat provider_priority if media-type-specific option is not set
-    if not priority_str or #priority_str == 0 then
-        priority_str = user_opts.provider_priority
-    end
-
-    -- Parse and validate the priority list
-    local providers = parse_provider_priority(priority_str)
-
-    -- Fall back to hardcoded default if no valid providers found
-    if #providers == 0 then
-        providers = { "theintrodb", "introdb", "skipdb" }
-    end
-
-    return providers
+    -- Parse and validate the priority list. If the media-type-specific list is
+    -- empty, no providers are returned, so no segments are queried for that
+    -- media type.
+    return parse_provider_priority(priority_str)
 end
 
 local function query_segments_pipeline()
@@ -1172,6 +1162,16 @@ local function query_segments_pipeline()
     if not media_info then return end
 
     local providers = get_provider_priority(media_info)
+
+    -- If no providers are configured for this media type, do not query any
+    -- segments (e.g. provider_priority_movie= empty means movies are skipped).
+    if #providers == 0 then
+        state.segments_loaded    = true
+        state.query_in_progress  = false
+        log_info("No providers configured for %s; skipping segment query.",
+            media_info.is_tv and "tvshow" or "movie")
+        return
+    end
 
     -- Expose resolved provider order via script messaging for debugging
     local media_type = media_info.is_tv and "tvshow" or "movie"
