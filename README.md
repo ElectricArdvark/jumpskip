@@ -192,6 +192,25 @@ mark_chapters=yes
 # Name for chapter created:
 default_chapter_title=Chapter
 
+# Chapter-based skipping:
+# Master toggle 
+chapter_skip_enabled=yes
+# Per-category toggles
+chapter_skip_intro=yes
+chapter_skip_outro=yes
+chapter_skip_recap=yes
+chapter_skip_preview=yes
+# Keyword lists
+chapter_skip_keywords_intro=intro,introduction,opening,op,theme,title sequence
+chapter_skip_keywords_outro=ed,ending,outro,credits,end credits,closing
+chapter_skip_keywords_recap=recap,previously
+chapter_skip_keywords_preview=preview,next episode
+# Sanity bounds for chapter duration
+chapter_skip_min_duration=10.0
+chapter_skip_max_duration=600.0
+# Overlap threshold
+chapter_skip_overlap_threshold=0.5
+
 # HTTP network request timeout:
 request_timeout=8
 # Enable debug logging in mpv terminal:
