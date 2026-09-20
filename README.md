@@ -8,7 +8,7 @@ OSC by [ModernZ](https://github.com/Samillion/ModernZ).
 <img width="1920" height="1080" alt="Screenshot (127)" src="https://github.com/user-attachments/assets/409d74c4-fcfe-4b03-8c02-0f42351268c1" />
 
 > [!IMPORTANT]
-> **Colored Segments work only using a modified ModernZ** [Guide](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments).
+> **Colored Segments work only using a modified ModernZ or uosc** [Guide](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments).
  
 <img width="24" height="24" alt="output-onlinepngtools" src="https://github.com/user-attachments/assets/7455cd12-811c-4446-b1d9-640f4ef13a61" /> Intro
 
@@ -19,7 +19,7 @@ OSC by [ModernZ](https://github.com/Samillion/ModernZ).
 <img width="24" height="24" alt="output-onlinepngtools (3)" src="https://github.com/user-attachments/assets/8e9ba2fd-bceb-4426-a26c-b0c3bbe367bc" /> Preview/Post-Credits
 
 
-All colors changeable in **modernz.conf**
+All colors changeable in **modernz.conf** or **uosc.conf**
 
 ---
 > [!NOTE]
@@ -40,10 +40,12 @@ All colors changeable in **modernz.conf**
   - Seamless fallback: if the primary provider has no match or encounters a network error, the script automatically queries the next provider.
   - **Segment Merging**: If the primary provider has an intro but lacks an outro or recap, the script queries subsequent providers to fill in missing segment types.
 - **Colored Segments**:
-  - Show skippable segments types directly in the seekbar with diffrent customizable colors `script-opts/modernz.conf`.
-  - Requires modified [ModernZ](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments)
+  - Show skippable segments types directly in the seekbar with diffrent customizable colors `script-opts/modernz.conf` or `script-opts/uosc.conf`.
+  - Requires modified [ModernZ](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments) or [uosc](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments)
 - **Interactive On-Screen Clickable Button**:
   - Semi-transparent vector card (ASS overlay) (`Skip Intro ▶`, `Skip Outro ▶`, etc.).
+- **Chapter-based skipping**:
+  - Automatically skips chapters based on title (eg. "OP" or "Outro", "Recap" etc.).
 - **Keyboard Shortcut**:
   - Instant skipping via configurable keybind (default: `Tab`).
 - **Configurable Auto-Skip**:
@@ -221,6 +223,8 @@ debug_mode=no
 ## TO-DO
 - [x] Add IntroDB movies.
 - [x] Add Per-media type, provider priority.
+- [x] Diifrent osc support.
+  - [x] uosc
 - [ ] Add AniSkip.
 - [ ] Add Colored segments support to other osc.
 
