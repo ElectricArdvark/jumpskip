@@ -304,7 +304,6 @@ local function make_segment(seg_type, label, start_sec, end_sec, provider)
     }
 end
 
--- Chapter-based skipping: keyword matching utilities
 local function parse_keywords(keyword_str)
     local keywords = {}
     if not keyword_str or #keyword_str == 0 then return keywords end
@@ -318,13 +317,10 @@ local function parse_keywords(keyword_str)
 end
 
 local function is_whole_word_match(text, keyword)
-    -- For short keywords (<= 3 chars), require whole word match
     if #keyword <= 3 then
-        -- Use word boundary pattern: %f[%w]keyword%f[%W] or start/end of string
         local pattern = "%f[%w]" .. keyword:gsub("([%^%$%(%)%%%.%[%]%*%+%-%?])", "%%%1") .. "%f[%W]"
         return text:lower():match(pattern) ~= nil
     else
-        -- For longer keywords, simple substring match is fine
         return text:lower():find(keyword:lower(), 1, true) ~= nil
     end
 end
@@ -332,7 +328,6 @@ end
 local function chapter_matches_keywords(chapter_title, keywords)
     if not chapter_title or #chapter_title == 0 then return false end
     local normalized = chapter_title:lower()
-    -- Normalize punctuation and whitespace
     normalized = normalized:gsub("[%p]", " ")
     normalized = normalized:gsub("%s+", " ")
     normalized = normalized:match("^%s*(.-)%s*$") or ""
@@ -344,7 +339,6 @@ local function chapter_matches_keywords(chapter_title, keywords)
     return false
 end
 
--- Check if a chapter-derived segment overlaps with existing provider segments
 local function check_overlap(chapter_start, chapter_end, existing_segments, threshold)
     threshold = threshold or user_opts.chapter_skip_overlap_threshold
     local chapter_duration = chapter_end - chapter_start
@@ -362,7 +356,6 @@ local function check_overlap(chapter_start, chapter_end, existing_segments, thre
     return false, 0
 end
 
--- Detect skippable segments from embedded chapters
 local function detect_chapter_segments(chapters, duration, existing_segments, media_info)
     local detected = {}
     if not chapters or type(chapters) ~= "table" or #chapters == 0 then
@@ -374,7 +367,6 @@ local function detect_chapter_segments(chapters, duration, existing_segments, me
         return detected
     end
 
-    -- Parse keyword lists per category
     local keyword_lists = {
         intro    = parse_keywords(user_opts.chapter_skip_keywords_intro),
         outro    = parse_keywords(user_opts.chapter_skip_keywords_outro),
@@ -382,7 +374,6 @@ local function detect_chapter_segments(chapters, duration, existing_segments, me
         preview  = parse_keywords(user_opts.chapter_skip_keywords_preview),
     }
 
-    -- Per-category enable toggles
     local category_enabled = {
         intro   = user_opts.chapter_skip_intro,
         outro   = user_opts.chapter_skip_outro,
@@ -390,7 +381,6 @@ local function detect_chapter_segments(chapters, duration, existing_segments, me
         preview = user_opts.chapter_skip_preview,
     }
 
-    -- Sort chapters by time
     local sorted_chapters = {}
     for _, ch in ipairs(chapters) do
         if ch and ch.time then
@@ -412,13 +402,11 @@ local function detect_chapter_segments(chapters, duration, existing_segments, me
         local end_time = (i < #sorted_chapters) and sorted_chapters[i + 1].time or duration
         local chapter_duration = end_time - start_time
 
-        -- Sanity bounds check
         if chapter_duration < min_dur or chapter_duration > max_dur then
             log_debug("chapter-skip: '%s' @%.2fs skipped (dur %.1fs out of bounds)", ch.title, start_time, chapter_duration)
             goto continue
         end
 
-        -- Check each category
         local matched = false
         for cat, keywords in pairs(keyword_lists) do
             if category_enabled[cat] and #keywords > 0 then
@@ -1345,10 +1333,9 @@ local function query_segments_pipeline()
                             end
                         end
 
-                        -- Chapter-based skipping: detect segments from embedded chapters
-                        -- to fill gaps where providers returned no data for a category
                         if user_opts.chapter_skip_enabled then
-                            local base_chapters = mp.get_property_native("chapter-list") or {}
+                            local base_chapters = state.base_chapter_list
+                                or mp.get_property_native("chapter-list") or {}
                             local chapter_segs = detect_chapter_segments(base_chapters, state.duration, final_segs, state.media_info)
                             if #chapter_segs > 0 then
                                 log_info("Adding %d chapter-derived segment(s) to fill provider gaps", #chapter_segs)
