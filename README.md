@@ -61,6 +61,18 @@ All colors are changeable in **`modernz.conf`** or **`uosc.conf`**
   - Fine-tune timing offsets, segment toggles, provider priorities, timeouts, colors, and button positions via `script-opts/jumpskip.conf`.
 ---
 
+## Media Identification
+
+1. **TMDB API** — used first, if a key is configured (Recommended)
+
+- If `tmdb_api_key` is set in user options, it searches `api.themoviedb.org/3/search/movie` or `/search/tv` by parsed title (+ year for movies).
+- On a hit, it stores the **TMDB ID**, then makes a second call to `/external_ids` to resolve an **IMDb ID**.
+
+2. **Cinemeta** — fallback when no TMDb key
+
+- Queries `v3-cinemeta.strem.io/catalog/movie|series/top/search=<title>.json` (no API key needed).
+- Scores every returned candidate, penalising lower-ranked results by −0.5 per rank position, the accepts the best match only if its score ≥ 300, storing its **IMDb ID**.
+
 ## Dependencies
 
 - **mpv**: v0.29.0 or newer (tested with mpv v0.41.0).
