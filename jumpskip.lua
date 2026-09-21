@@ -1,6 +1,6 @@
 --[[
     mpv-skip-segment
-    Version 1.7
+    version 1.8
     ================
     A Lua script for mpv that detects and skips segments (intros, recaps, outros/credits, previews,
     and movie end-credits/post-credits) using crowdsourced data from TheIntroDB (api.theintrodb.org),
@@ -88,8 +88,6 @@ local user_opts = {
     show_osd_message     = true,
     osd_message_duration = 2.0,
     debug_mode           = false,
-
-    -- Chapter-based skipping options
     chapter_skip_enabled        = true,
     chapter_skip_intro          = true,
     chapter_skip_outro          = true,
@@ -258,29 +256,516 @@ local function url_encode(str)
     end)
 end
 
-local function clean_title(raw)
+local TitleParser = {}
+
+local SPECIAL_TERMS = {
+    "rifftrax", "commentary", "reaction", "re edit", "re-edit",
+    "behind the scenes", "featurette", "making of", "interview",
+    "deleted scenes", "bonus", "short", "documentary"
+}
+
+function TitleParser.contains_special(str)
+    if not str then return false end
+    local low = str:lower()
+    for _, term in ipairs(SPECIAL_TERMS) do
+        local pat = "[%s%p]" .. term:gsub("%-", "%%-") .. "[%s%p]"
+        local prefixed = " " .. low .. " "
+        if prefixed:find(pat) or low:find("^" .. term:gsub("%-", "%%-") .. "[%s%p]") or low:find("[%s%p]" .. term:gsub("%-", "%%-") .. "$") or low == term then
+            return true, term
+        end
+    end
+    return false, nil
+end
+
+function TitleParser.clean_title(raw)
     if not raw then return "" end
     local s = raw
+    -- Strip release groups:
+    s = s:gsub("^%s*%b[]%s*", "")
+    -- Strip bracketed hashes:
+    s = s:gsub("%[[0-9a-fA-F]+%]", " ")
+    -- Replace dots, underscores, hyphens with spaces:
     s = s:gsub("[%._%-]", " ")
+    -- Strip resolution tags:
+    s = s:gsub("%f[%w][12]%d%d%d[pi]%f[%W]", " ")
+    s = s:gsub("%f[%w][475]%d%d[pi]%f[%W]", " ")
+    s = s:gsub("%f[%w][48][kK]%f[%W]", " ")
+    s = s:gsub("%f[%w][uU][hH][dD]%f[%W]", " ")
+    s = s:gsub("%f[%w][fF][hH][dD]%f[%W]", " ")
+    -- Strip video codecs:
+    s = s:gsub("%f[%w][xXhH]26[45]%f[%W]", " ")
+    s = s:gsub("%f[%w][hH][eE][vV][cC]%f[%W]", " ")
+    s = s:gsub("%f[%w][aA][vV][cC]%f[%W]", " ")
+    s = s:gsub("%f[%w][aA][vV]1%f[%W]", " ")
+    s = s:gsub("%f[%w][xX][vV][iI][dD]%f[%W]", " ")
+    s = s:gsub("%f[%w][dD][iI][vV][xX]%f[%W]", " ")
+    s = s:gsub("%f[%w]10[bB][iI][tT]%f[%W]", " ")
+    s = s:gsub("%f[%w]8[bB][iI][tT]%f[%W]", " ")
+    -- Strip sources:
+    s = s:gsub("%f[%w][bB][lL][uU]%s*[rR][aA][yY]%f[%W]", " ")
+    s = s:gsub("%f[%w][bB][dD][rR][iI][pP]%f[%W]", " ")
+    s = s:gsub("%f[%w][bB][rR][rR][iI][pP]%f[%W]", " ")
+    s = s:gsub("%f[%w][wW][eE][bB]%s*[dD][lL]%f[%W]", " ")
+    s = s:gsub("%f[%w][wW][eE][bB][dD][lL]%f[%W]", " ")
+    s = s:gsub("%f[%w][wW][eE][bB]%s*[rR][iI][pP]%f[%W]", " ")
+    s = s:gsub("%f[%w][wW][eE][bB][rR][iI][pP]%f[%W]", " ")
+    s = s:gsub("%f[%w][hH][dD][tT][vV]%f[%W]", " ")
+    s = s:gsub("%f[%w][pP][dD][tT][vV]%f[%W]", " ")
+    s = s:gsub("%f[%w][dD][vV][dD][rR][iI][pP]%f[%W]", " ")
+    s = s:gsub("%f[%w][dD][vV][dD]%f[%W]", " ")
+    s = s:gsub("%f[%w][rR][eE][mM][uU][xX]%f[%W]", " ")
+    s = s:gsub("%f[%w][iI][mM][aA][xX]%f[%W]", " ")
+    -- Strip audio tags:
+    s = s:gsub("%f[%w][dD][tT][sS]%s*[hH][dD]%f[%W]", " ")
+    s = s:gsub("%f[%w][dD][tT][sS]%f[%W]", " ")
+    s = s:gsub("%f[%w][tT][rR][uU][eE][hH][dD]%f[%W]", " ")
+    s = s:gsub("%f[%w][aA][tT][mM][oO][sS]%f[%W]", " ")
+    s = s:gsub("%f[%w][dD][dD]%+?%s*[572]%s*1%f[%W]", " ")
+    s = s:gsub("%f[%w][dD][dD]%+?%s*2%s*0%f[%W]", " ")
+    s = s:gsub("%f[%w][aA][cC]3%f[%W]", " ")
+    s = s:gsub("%f[%w][eE][aA][cC]3%f[%W]", " ")
+    s = s:gsub("%f[%w][aA][aA][cC]%f[%W]", " ")
+    s = s:gsub("%f[%w][fF][lL][aA][cC]%f[%W]", " ")
+    -- Strip release tags:
+    s = s:gsub("%f[%w][pP][rR][oO][pP][eE][rR]%f[%W]", " ")
+    s = s:gsub("%f[%w][rR][eE][pP][aA][cC][kK]%f[%W]", " ")
+    s = s:gsub("%f[%w][rR][eE][rR][iI][pP]%f[%W]", " ")
+    s = s:gsub("%f[%w][eE][xX][tT][eE][nN][dD][eE][dD]%f[%W]", " ")
+    s = s:gsub("%f[%w][uU][nN][rR][aA][tT][eE][dD]%f[%W]", " ")
+    s = s:gsub("%f[%w][rR][eE][mM][aA][sS][tT][eE][rR][eE][dD]%f[%W]", " ")
+    s = s:gsub("%f[%w][eE][xX][tT][rR][aA]%f[%W]", " ")
+    -- Strip filesize tags:
+    s = s:gsub("%d+%s*[mM][bB]%f[%W]", " ")
+    s = s:gsub("%d+%s*[gG][bB]%f[%W]", " ")
+    -- Strip empty parentheses and brackets:
     s = s:gsub("%b[]", " ")
     s = s:gsub("%b()", " ")
-    s = s:gsub("[12]%d%d%dp", " ")
-    s = s:gsub("[48][kK]", " ")
-    s = s:gsub("[xX]26[45]", " ")
-    s = s:gsub("[hH][eE][vV][cC]", " ")
-    s = s:gsub("[aA][vV][cC]", " ")
-    s = s:gsub("[bB][lL][uU][rR][aA][yY]", " ")
-    s = s:gsub("[wW][eE][bB]%-[dD][lL]", " ")
-    s = s:gsub("[wW][eE][bB][rR][iI][pP]", " ")
-    s = s:gsub("[hH][dD][tT][vV]", " ")
-    s = s:gsub("%d+%s*[mM][bB]", " ")
-    s = s:gsub("%d+%s*[gG][bB]", " ")
-    s = s:gsub("[dD][dD]%+?%s*5%s*1", " ")
-    s = s:gsub("[dD][dD]%+?%s*7%s*1", " ")
-    s = s:gsub("[dD][dD]%+?%s*2%s*0", " ")
+    -- Clean whitespace:
     s = s:gsub("%s+", " ")
-    return s:match("^%s*(.-)%s*$")
+    return s:match("^%s*(.-)%s*$") or ""
 end
+
+function TitleParser.canonical_title(str)
+    if not str then return "" end
+    local s = str:lower()
+    s = s:gsub("part%s+one%f[%W]", "part 1")
+    s = s:gsub("part%s+two%f[%W]", "part 2")
+    s = s:gsub("part%s+three%f[%W]", "part 3")
+    s = s:gsub("part%s+four%f[%W]", "part 4")
+    s = s:gsub("part%s+i%f[%W]", "part 1")
+    s = s:gsub("part%s+ii%f[%W]", "part 2")
+    s = s:gsub("part%s+iii%f[%W]", "part 3")
+    s = s:gsub("part%s+iv%f[%W]", "part 4")
+    s = s:gsub("[%p]", " ")
+    s = s:gsub("%s+", " ")
+    return s:match("^%s*(.-)%s*$") or ""
+end
+
+function TitleParser.canonical_sequel(canon_str)
+    if not canon_str then return "" end
+    local s = canon_str:gsub("part%s+(%d+)", "%1")
+    s = s:gsub("%s+", " ")
+    return s:match("^%s*(.-)%s*$") or ""
+end
+
+function TitleParser.validate_series_seasons(meta_videos, media_info)
+    if not media_info.is_tv then return true end
+    if not media_info.season_missing then return true end
+
+    local seasons_set = {}
+    for _, v in ipairs(meta_videos or {}) do
+        local s = tonumber(v.season)
+        if s and s > 0 then
+            seasons_set[s] = true
+        end
+    end
+
+    local season_count = 0
+    for _ in pairs(seasons_set) do
+        season_count = season_count + 1
+    end
+
+    if season_count > 1 then
+        return false, season_count
+    end
+
+    media_info.season = 1
+    media_info.season_missing = false
+    return true, 1
+end
+
+function TitleParser.score_movie_candidate(candidate, query_title, target_year, all_candidates)
+    if not candidate or not candidate.name then return -99999 end
+
+    local cand_name = candidate.name
+    local cand_year = tonumber(candidate.year) or tonumber(candidate.releaseInfo)
+    if not cand_year and cand_name then
+        local parens = cand_name:match("%b()")
+        local y_match = parens and parens:match("(%d%d%d%d)") or cand_name:match("(%d%d%d%d)")
+        cand_year = tonumber(y_match)
+    end
+
+    local query_has_special = TitleParser.contains_special(query_title)
+    local cand_has_special = TitleParser.contains_special(cand_name)
+    local cand_is_doc_or_short = false
+    if candidate.genres then
+        for _, g in ipairs(candidate.genres) do
+            local gl = g:lower()
+            if gl == "short" or gl == "documentary" then cand_is_doc_or_short = true end
+        end
+    end
+
+    if not query_has_special and (cand_has_special or cand_is_doc_or_short) then
+        return -99999
+    end
+
+    local has_year_compatible = false
+    if target_year and all_candidates then
+        for _, other in ipairs(all_candidates) do
+            local oy = tonumber(other.year) or tonumber(other.releaseInfo)
+            if not oy and other.name then
+                local parens = other.name:match("%b()")
+                local ym = parens and parens:match("(%d%d%d%d)") or other.name:match("(%d%d%d%d)")
+                oy = tonumber(ym)
+            end
+            if oy and math.abs(oy - target_year) <= 1 then
+                local o_special = TitleParser.contains_special(other.name)
+                if query_has_special or not o_special then
+                    has_year_compatible = true
+                    break
+                end
+            end
+        end
+    end
+
+    if target_year then
+        if cand_year then
+            local diff = math.abs(cand_year - target_year)
+            if has_year_compatible and diff > 1 then
+                return -99999
+            end
+            if diff > 1 then
+                return -99999
+            end
+        end
+    end
+
+    local q_canon = TitleParser.canonical_title(query_title)
+    local c_canon = TitleParser.canonical_title(cand_name)
+    local q_seq = TitleParser.canonical_sequel(q_canon)
+    local c_seq = TitleParser.canonical_sequel(c_canon)
+
+    local function strip_articles(s)
+        return (s or ""):gsub("^the%s+", ""):gsub("^a%s+", ""):gsub("^an%s+", "")
+    end
+
+    local q_clean = strip_articles(q_canon)
+    local c_clean = strip_articles(c_canon)
+
+    for c_num in c_seq:gmatch("%f[%w](%d+)%f[%W]") do
+        local n = tonumber(c_num)
+        if n and n > 1 and n < 1900 then
+            local q_has_num = q_seq:find("%f[%w]" .. c_num .. "%f[%W]") ~= nil
+            if not q_has_num then
+                return -99999
+            end
+        end
+    end
+
+    if target_year then
+        c_canon = c_canon:gsub("%s+" .. tostring(target_year) .. "$", "")
+        c_clean = c_clean:gsub("%s+" .. tostring(target_year) .. "$", "")
+        c_seq   = c_seq:gsub("%s+" .. tostring(target_year) .. "$", "")
+    end
+
+    local score = 0
+
+    if q_canon == c_canon or q_seq == c_seq or q_clean == c_clean then
+        score = 1000
+    elseif c_canon:find("^" .. q_canon .. "%s+part%s+%d+") or c_clean:find("^" .. q_clean .. "%s+part%s+%d+") then
+        if target_year and cand_year and math.abs(cand_year - target_year) <= 1 then
+            score = 950
+        else
+            score = 400
+        end
+    elseif q_canon:find("^" .. c_canon .. "%s+part%s+%d+") or q_clean:find("^" .. c_clean .. "%s+part%s+%d+") then
+        score = 800
+    else
+        local q_words = {}
+        for w in q_canon:gmatch("%w+") do
+            if w ~= "the" and w ~= "a" and w ~= "an" then q_words[w] = true end
+        end
+        local c_words = {}
+        local c_extra_words = 0
+        for w in c_canon:gmatch("%w+") do
+            if w ~= "the" and w ~= "a" and w ~= "an" then
+                c_words[w] = true
+                if not q_words[w] and w ~= "part" and not tonumber(w) then
+                    c_extra_words = c_extra_words + 1
+                end
+            end
+        end
+        local match_count = 0
+        local total_q = 0
+        for w in pairs(q_words) do
+            total_q = total_q + 1
+            if c_words[w] then match_count = match_count + 1 end
+        end
+        if total_q > 0 and match_count == total_q and c_extra_words == 0 then
+            score = 800
+        else
+            score = 0
+        end
+    end
+
+    if score > 0 and target_year and cand_year then
+        local diff = math.abs(cand_year - target_year)
+        if diff == 0 then
+            score = score + 200
+        elseif diff == 1 then
+            score = score + 100
+        end
+    end
+
+    if query_has_special and cand_has_special then
+        score = score + 500
+    end
+
+    return score
+end
+
+function TitleParser.score_series_candidate(candidate, query_title, all_candidates)
+    if not candidate or not candidate.name then return -99999 end
+    local q_canon = TitleParser.canonical_title(query_title)
+    local c_canon = TitleParser.canonical_title(candidate.name)
+
+    local function strip_articles(s)
+        return (s or ""):gsub("^the%s+", ""):gsub("^a%s+", ""):gsub("^an%s+", "")
+    end
+    local q_clean = strip_articles(q_canon)
+    local c_clean = strip_articles(c_canon)
+
+    if q_canon == c_canon or q_clean == c_clean then
+        return 1000
+    end
+
+    local q_words = {}
+    for w in q_clean:gmatch("%w+") do q_words[w] = true end
+    local c_words = {}
+    local c_extra = 0
+    for w in c_clean:gmatch("%w+") do
+        c_words[w] = true
+        if not q_words[w] then c_extra = c_extra + 1 end
+    end
+
+    local match_count = 0
+    local total_q = 0
+    for w in pairs(q_words) do
+        total_q = total_q + 1
+        if c_words[w] then match_count = match_count + 1 end
+    end
+
+    if total_q > 0 and match_count == total_q and c_extra == 0 then
+        return 800
+    elseif total_q > 0 and match_count == total_q and c_extra <= 1 then
+        return 400
+    end
+
+    return 0
+end
+
+function TitleParser.extract_media_metadata(path, filename, raw_media_title, metadata)
+    path = path or ""
+    filename = filename or ""
+    raw_media_title = raw_media_title or ""
+    metadata = metadata or {}
+
+    local info = {
+        is_tv          = false,
+        title          = nil,
+        season         = nil,
+        episode        = nil,
+        year           = nil,
+        imdb_id        = nil,
+        tmdb_id        = nil,
+        tvdb_id        = nil,
+        season_missing = false,
+        year_ambiguous = false,
+    }
+
+    for key, val in pairs(metadata) do
+        local k = string.lower(tostring(key))
+        local v = tostring(val)
+        if k == "imdb" or k == "imdb_id" or k == "imdbid" then
+            local id = v:match("tt%d%d%d%d%d%d%d%d?")
+            if id then info.imdb_id = id end
+        elseif k == "tmdb" or k == "tmdb_id" or k == "tmdbid" then
+            local id = tonumber(v:match("%d+"))
+            if id then info.tmdb_id = id end
+        elseif k == "tvdb" or k == "tvdb_id" or k == "tvdbid" then
+            local id = tonumber(v:match("%d+"))
+            if id then info.tvdb_id = id end
+        elseif k == "season_number" or k == "season" then
+            info.season = tonumber(v)
+        elseif k == "episode_id" or k == "episode_sort" or k == "episode_number" or k == "episode" then
+            info.episode = tonumber(v)
+        end
+    end
+
+    local target_text = filename .. " " .. path .. " " .. raw_media_title
+    if not info.imdb_id then
+        local id = target_text:match("tt%d%d%d%d%d%d%d%d?")
+        if id then info.imdb_id = id end
+    end
+    if not info.tmdb_id then
+        local id_str = target_text:match("tmdb%-(%d+)") or target_text:match("tmdbid%-(%d+)")
+        if id_str then info.tmdb_id = tonumber(id_str) end
+    end
+    if not info.tvdb_id then
+        local id_str = target_text:match("tvdb%-(%d+)") or target_text:match("tvdbid%-(%d+)")
+        if id_str then info.tvdb_id = tonumber(id_str) end
+    end
+
+    local fn = filename
+    if fn and #fn > 0 and not fn:match("^av://") and not fn:match("^lavfi:") then
+        local fn_base = fn:gsub("%.[a-zA-Z0-9]+$", "")
+        local fn_clean = fn_base:gsub("^%s*%b[]%s*", "")
+        fn_clean = fn_clean:gsub("%-[%w_%.]+$", "")
+
+        local s_title, s, e
+        local season_missing = false
+
+        s_title, s, e = fn_clean:match("^(.-)[%._%-%s%([]+[sS](%d%d?)[%._%-%s%]]*[eE](%d%d?%d?)")
+
+        if not s_title then
+            s_title, s, e = fn_clean:match("^(.-)[%._%-%s%([]+(%d%d?)[xX](%d%d?%d?)")
+        end
+
+        if not s_title then
+            s_title, s, e = fn_clean:match("^(.-)[%._%-%s%([]+[sS]eason[%._%-%s]*(%d%d?)[%._%-%s%]]*[eE]pisode[%._%-%s]*(%d%d?%d?)")
+        end
+
+        if not s_title then
+            local st, ep = fn_clean:match("^(.-)[%._%-%s%([]+[eE]pisode[%._%-%s]*(%d%d?%d?)")
+            if st and ep then
+                s_title, s, e = st, "1", ep
+                season_missing = true
+            end
+        end
+
+        if not s_title then
+            local st, ep = fn_clean:match("^(.-)[%._%-%s%([]+[eE][pP][%._%-%s]*(%d%d?%d?)")
+            if st and ep then
+                s_title, s, e = st, "1", ep
+                season_missing = true
+            end
+        end
+
+        if not s_title then
+            local st, ep = fn_clean:match("^(.-)[%._%-%s%([]+[eE](%d%d?%d?)$")
+            if not st then
+                st, ep = fn_clean:match("^(.-)[%._%-%s%([]+[eE](%d%d?%d?)[%._%-%s%)%]]")
+            end
+            if st and ep then
+                s_title, s, e = st, "1", ep
+                season_missing = true
+            end
+        end
+
+        if not s_title then
+            local st, ep = fn_clean:match("^(.-)[%s%._%-]%-%s*(%d%d?%d?)$")
+            if not st then
+                st, ep = fn_clean:match("^(.-)[%s%._%-]%-%s*(%d%d?%d?)[%s%._%-%)%]]")
+            end
+            if st and ep then
+                local num = tonumber(ep)
+                if num and num > 0 and num <= 999 then
+                    s_title, s, e = st, "1", ep
+                    season_missing = true
+                end
+            end
+        end
+
+        if not s_title then
+            local st, ep = fn_clean:match("^(.-)[%s%._%-]+(0%d%d?)$")
+            if not st then
+                st, ep = fn_clean:match("^(.-)[%s%._%-]+(0%d%d?)[%s%._%-%)%]]")
+            end
+            if st and ep then
+                local num = tonumber(ep)
+                if num and num > 0 and num <= 999 then
+                    s_title, s, e = st, "1", ep
+                    season_missing = true
+                end
+            end
+        end
+
+        if s_title and #s_title > 1 and s and e then
+            info.is_tv = true
+            info.season = tonumber(s)
+            info.episode = tonumber(e)
+            info.season_missing = season_missing
+            info.title = TitleParser.clean_title(s_title)
+        end
+
+        if not info.title then
+            local years_found = {}
+            local seen_years = {}
+            for y_str in fn_clean:gmatch("(%d%d%d%d)") do
+                local y_num = tonumber(y_str)
+                if y_num and y_num >= 1900 and y_num <= 2099 then
+                    local is_resolution = fn_clean:find(y_str .. "[pPiI]") ~= nil
+                    if not is_resolution and not seen_years[y_num] then
+                        seen_years[y_num] = true
+                        table.insert(years_found, y_num)
+                    end
+                end
+            end
+
+            if #years_found == 1 then
+                local y = years_found[1]
+                info.year = y
+                local m_title = fn_clean:match("^(.-)[%._%-%s%(]+" .. tostring(y) .. "[%._%-%s%)]*(.*)$")
+                if not m_title or #m_title == 0 then
+                    m_title = fn_clean:match("^(.-)" .. tostring(y))
+                end
+                if m_title and #m_title > 0 then
+                    info.title = TitleParser.clean_title(m_title)
+                else
+                    info.title = TitleParser.clean_title(fn_clean)
+                end
+            elseif #years_found > 1 then
+                info.year_ambiguous = true
+                info.year = nil
+                info.title = TitleParser.clean_title(fn_clean)
+            else
+                info.title = TitleParser.clean_title(fn_clean)
+            end
+        end
+    end
+
+    if not info.title or #info.title == 0 then
+        for key, val in pairs(metadata) do
+            local k = string.lower(tostring(key))
+            if (k == "show" or k == "series") and not info.title then
+                info.title = TitleParser.clean_title(tostring(val))
+            end
+        end
+        if not info.title and raw_media_title
+                and not raw_media_title:match("^av://")
+                and not raw_media_title:match("^lavfi:") then
+            info.title = TitleParser.clean_title(raw_media_title)
+        end
+    end
+
+    return info
+end
+
+local function clean_title(raw)
+    return TitleParser.clean_title(raw)
+end
+
+_G.TitleParser = TitleParser
 
 local function format_hms(sec)
     if type(sec) ~= "number" or sec ~= sec or sec == math.huge or sec < 0 then
@@ -416,7 +901,6 @@ local function detect_chapter_segments(chapters, duration, existing_segments, me
                 normalized = normalized:match("^%s*(.-)%s*$") or ""
                 for _, kw in ipairs(keywords) do
                     if is_whole_word_match(normalized, kw) then
-                        -- Check overlap with existing provider segments
                         local overlaps, ratio = check_overlap(start_time, end_time, existing_segments)
                         if overlaps then
                             log_debug("chapter-skip: '%s' matches %s but overlaps provider (%.0f%%)", ch.title, cat, ratio * 100)
@@ -477,113 +961,12 @@ local state = {
 }
 
 local function extract_media_metadata()
-    local path     = mp.get_property("path") or ""
-    local filename = mp.get_property("filename") or ""
-
-    local info = {
-        is_tv   = false,
-        title   = nil,
-        season  = nil,
-        episode = nil,
-        year    = nil,
-        imdb_id = nil,
-        tmdb_id = nil,
-        tvdb_id = nil,
-    }
-
-    local metadata = mp.get_property_native("metadata") or {}
-    for key, val in pairs(metadata) do
-        local k = string.lower(tostring(key))
-        local v = tostring(val)
-        if k == "imdb" or k == "imdb_id" or k == "imdbid" then
-            local id = v:match("tt%d%d%d%d%d%d%d%d?")
-            if id then info.imdb_id = id end
-        elseif k == "tmdb" or k == "tmdb_id" or k == "tmdbid" then
-            local id = tonumber(v:match("%d+"))
-            if id then info.tmdb_id = id end
-        elseif k == "tvdb" or k == "tvdb_id" or k == "tvdbid" then
-            local id = tonumber(v:match("%d+"))
-            if id then info.tvdb_id = id end
-        elseif k == "season_number" or k == "season" then
-            info.season = tonumber(v)
-        elseif k == "episode_id" or k == "episode_sort" or k == "episode_number" or k == "episode" then
-            info.episode = tonumber(v)
-        end
-    end
-
+    local path            = mp.get_property("path") or ""
+    local filename        = mp.get_property("filename") or ""
     local raw_media_title = mp.get_property("media-title") or ""
-    local target_text = filename .. " " .. path .. " " .. raw_media_title
+    local metadata        = mp.get_property_native("metadata") or {}
 
-    if not info.imdb_id then
-        local id = target_text:match("tt%d%d%d%d%d%d%d%d?")
-        if id then info.imdb_id = id end
-    end
-    if not info.tmdb_id then
-        local id_str = target_text:match("tmdb%-(%d+)") or target_text:match("tmdbid%-(%d+)")
-        if id_str then info.tmdb_id = tonumber(id_str) end
-    end
-    if not info.tvdb_id then
-        local id_str = target_text:match("tvdb%-(%d+)") or target_text:match("tvdbid%-(%d+)")
-        if id_str then info.tvdb_id = tonumber(id_str) end
-    end
-
-    local fn = filename
-    if fn and #fn > 0 and not fn:match("^av://") and not fn:match("^lavfi:") then
-        local fn_base  = fn:gsub("%.[a-zA-Z0-9]+$", "")
-        local fn_clean = fn_base:gsub("%-[%w_]+$", "")
-
-        local s_title, s, e = fn_clean:match("^(.-)[%._%-%s]+[sS](%d%d?)[%._%-%s]*[eE](%d%d?)")
-        if not s_title then
-            s_title, s, e = fn_clean:match("^(.-)[%._%-%s]+(%d%d?)[xX](%d%d+)")
-        end
-        if not s_title then
-            s_title, s, e = fn_clean:match("^(.-)[%._%-%s]+[sS]eason[%._%-%s]*(%d%d?)[%._%-%s]*[eE]pisode[%._%-%s]*(%d%d?)")
-        end
-        if not s_title then
-            local st, ep = fn_clean:match("^(.-)[%._%-%s]+[eE][pP][%._%-%s]*(%d%d%d?)")
-            if not st then
-                st, ep = fn_clean:match("^(.-)[%._%-%s]+[eE]pisode[%._%-%s]*(%d%d%d?)")
-            end
-            if st and ep then s_title, s, e = st, "1", ep end
-        end
-
-        if s_title and #s_title > 1 and s and e then
-            info.is_tv = true
-            if not info.season  then info.season  = tonumber(s) end
-            if not info.episode then info.episode = tonumber(e) end
-            info.title = clean_title(s_title)
-        end
-
-        if not info.title then
-            local m_title, y_str = fn_clean:match("^(.-)[%._%-%s%(]+(19%d%d)[%._%-%s%)]")
-            if not m_title then m_title, y_str = fn_clean:match("^(.-)[%._%-%s%(]+(20%d%d)[%._%-%s%)]") end
-            if not m_title then m_title, y_str = fn_clean:match("^(.-)[%._%-%s%(]+(19%d%d)$") end
-            if not m_title then m_title, y_str = fn_clean:match("^(.-)[%._%-%s%(]+(20%d%d)$") end
-            if m_title and #m_title > 0 and y_str then
-                info.title = clean_title(m_title)
-                info.year  = tonumber(y_str)
-            end
-        end
-
-        if not info.title and #fn_clean > 0 then
-            local cleaned = clean_title(fn_clean)
-            if cleaned and #cleaned > 0 then info.title = cleaned end
-        end
-    end
-
-    if not info.title or #info.title == 0 then
-        for key, val in pairs(metadata) do
-            local k = string.lower(tostring(key))
-            if (k == "show" or k == "series") and not info.title then
-                info.title = clean_title(tostring(val))
-            end
-        end
-        if not info.title and raw_media_title
-                and not raw_media_title:match("^av://")
-                and not raw_media_title:match("^lavfi:") then
-            info.title = clean_title(raw_media_title)
-        end
-    end
+    local info = TitleParser.extract_media_metadata(path, filename, raw_media_title, metadata)
 
     log_debug("Media parsed: title='%s', is_tv=%s, S=%s, E=%s, Year=%s, imdb=%s, tmdb=%s, tvdb=%s",
         tostring(info.title), tostring(info.is_tv), tostring(info.season), tostring(info.episode),
@@ -646,6 +1029,12 @@ local function resolve_title_to_imdb(media_info, current_file_id, callback)
         return
     end
 
+    if media_info.year_ambiguous then
+        log_info("Filename contains multiple conflicting years; rejecting title resolution to avoid false matches")
+        callback(false)
+        return
+    end
+
     if not media_info.title or #media_info.title == 0 then
         callback(media_info.tmdb_id ~= nil or media_info.tvdb_id ~= nil)
         return
@@ -662,20 +1051,43 @@ local function resolve_title_to_imdb(media_info, current_file_id, callback)
         async_http_get(url, nil, 6, function(success, data, err)
             if state.file_id ~= current_file_id then return end
             if success and data and data.results and #data.results > 0 then
-                media_info.tmdb_id = data.results[1].id
+                local res1 = data.results[1]
+                media_info.tmdb_id = res1.id
                 log_info("Resolved title '%s' to TMDb ID %d via TMDb API", media_info.title, media_info.tmdb_id)
 
-                local ext_type = media_info.is_tv and "tv" or "movie"
-                local ext_url = string.format("https://api.themoviedb.org/3/%s/%d/external_ids?api_key=%s",
-                    ext_type, media_info.tmdb_id, user_opts.tmdb_api_key)
-                async_http_get(ext_url, nil, 4, function(ext_ok, ext_data, ext_err)
-                    if state.file_id ~= current_file_id then return end
-                    if ext_ok and ext_data and ext_data.imdb_id then
-                        media_info.imdb_id = ext_data.imdb_id
-                        log_info("Resolved TMDb ID %d to IMDb ID %s", media_info.tmdb_id, media_info.imdb_id)
-                    end
-                    callback(true)
-                end)
+                local function fetch_external_ids()
+                    local ext_type = media_info.is_tv and "tv" or "movie"
+                    local ext_url = string.format("https://api.themoviedb.org/3/%s/%d/external_ids?api_key=%s",
+                        ext_type, media_info.tmdb_id, user_opts.tmdb_api_key)
+                    async_http_get(ext_url, nil, 4, function(ext_ok, ext_data, ext_err)
+                        if state.file_id ~= current_file_id then return end
+                        if ext_ok and ext_data and ext_data.imdb_id then
+                            media_info.imdb_id = ext_data.imdb_id
+                            log_info("Resolved TMDb ID %d to IMDb ID %s", media_info.tmdb_id, media_info.imdb_id)
+                        end
+                        callback(true)
+                    end)
+                end
+
+                if media_info.is_tv and media_info.season_missing then
+                    local tv_url = string.format("https://api.themoviedb.org/3/tv/%d?api_key=%s",
+                        media_info.tmdb_id, user_opts.tmdb_api_key)
+                    async_http_get(tv_url, nil, 4, function(tv_ok, tv_data)
+                        if state.file_id ~= current_file_id then return end
+                        if tv_ok and tv_data and tv_data.number_of_seasons and tv_data.number_of_seasons > 1 then
+                            log_warn("Show '%s' has %d seasons, but season was omitted in filename; rejecting ambiguous episode",
+                                media_info.title, tv_data.number_of_seasons)
+                            callback(false)
+                            return
+                        else
+                            media_info.season = 1
+                            media_info.season_missing = false
+                            fetch_external_ids()
+                        end
+                    end)
+                else
+                    fetch_external_ids()
+                end
             else
                 callback(media_info.tmdb_id ~= nil or media_info.tvdb_id ~= nil)
             end
@@ -690,62 +1102,55 @@ local function resolve_title_to_imdb(media_info, current_file_id, callback)
     async_http_get(url, nil, 6, function(success, data, err)
         if state.file_id ~= current_file_id then return end
         if success and data and data.metas and #data.metas > 0 then
-            local function normalize(s)
-                return (s or ""):lower():gsub("[^%a%d]", "")
-            end
-            local query_norm = normalize(media_info.title)
-            local best_meta, best_score = nil, -1
+            local best_meta, best_score = nil, 0
             for rank, m in ipairs(data.metas) do
-                local name_norm = normalize(m.name)
                 local score = 0
-                if name_norm == query_norm then
-                    score = 1000
-                elseif name_norm:sub(1, #query_norm) == query_norm then
-                    score = 500
-                elseif query_norm:find(name_norm, 1, true) or name_norm:find(query_norm, 1, true) then
-                    score = 300
+                if media_info.is_tv then
+                    score = TitleParser.score_series_candidate(m, media_info.title, data.metas)
                 else
-                    local common, qlen, nlen = 0, #query_norm, #name_norm
-                    for ci = 1, math.min(qlen, nlen) do
-                        if query_norm:sub(ci, ci) == name_norm:sub(ci, ci) then
-                            common = common + 1
-                        else break end
-                    end
-                    score = math.floor(common / math.max(qlen, nlen, 1) * 200)
-                end
-
-                local cand_year = tonumber(m.year or m.releaseInfo)
-                if media_info.year and cand_year then
-                    if cand_year == media_info.year then
-                        score = score + 200
-                    elseif math.abs(cand_year - media_info.year) == 1 then
-                        score = score + 100
-                    else
-                        score = score - 150
-                    end
-                end
-
-                local lname = (m.name or ""):lower()
-                if lname:find("reaction") or lname:find("re%-edit") or lname:find("re edit") or lname:find("commentary") then
-                    score = score - 400
+                    score = TitleParser.score_movie_candidate(m, media_info.title, media_info.year, data.metas)
                 end
                 score = score - (rank - 1) * 0.5
-                log_debug("Cinemeta candidate #%d '%s' (year=%s) norm='%s' score=%.1f",
-                    rank, m.name or "", tostring(cand_year), name_norm, score)
+                local cand_year = tonumber(m.year) or tonumber(m.releaseInfo)
+                log_debug("Cinemeta candidate #%d '%s' (year=%s) score=%.1f",
+                    rank, m.name or "", tostring(cand_year), score)
                 if score > best_score then
                     best_score = score
                     best_meta  = m
                 end
             end
+
             local id = best_meta and (best_meta.imdb_id or best_meta.id)
-            if id and id:match("^tt%d+") and best_score > 0 then
-                media_info.imdb_id = id
-                log_info("Resolved title '%s'%s to IMDb ID %s via Cinemeta (score=%.1f, name='%s')",
-                    media_info.title,
-                    media_info.year and (" (" .. tostring(media_info.year) .. ")") or "",
-                    id, best_score, best_meta.name or "?")
-                callback(true)
-                return
+            if id and id:match("^tt%d+") and best_score >= 300 then
+                if media_info.is_tv and media_info.season_missing then
+                    local meta_url = string.format("https://v3-cinemeta.strem.io/meta/series/%s.json", id)
+                    async_http_get(meta_url, nil, 6, function(meta_ok, meta_data, meta_err)
+                        if state.file_id ~= current_file_id then return end
+                        if meta_ok and meta_data and meta_data.meta then
+                            local ok, cnt = TitleParser.validate_series_seasons(meta_data.meta.videos, media_info)
+                            if not ok then
+                                log_warn("Series '%s' has %d seasons, but season was omitted in filename; rejecting match to prevent wrong skip segments",
+                                    best_meta.name or "?", cnt)
+                                callback(false)
+                                return
+                            end
+                        end
+                        media_info.imdb_id = id
+                        log_info("Resolved series '%s' (S%dE%d) to IMDb ID %s via Cinemeta (score=%.1f, name='%s')",
+                            media_info.title, media_info.season or 1, media_info.episode or 1,
+                            id, best_score, best_meta.name or "?")
+                        callback(true)
+                    end)
+                    return
+                else
+                    media_info.imdb_id = id
+                    log_info("Resolved title '%s'%s to IMDb ID %s via Cinemeta (score=%.1f, name='%s')",
+                        media_info.title,
+                        media_info.year and (" (" .. tostring(media_info.year) .. ")") or "",
+                        id, best_score, best_meta.name or "?")
+                    callback(true)
+                    return
+                end
             end
         end
         log_debug("Could not resolve title '%s' to an IMDb ID via Cinemeta", media_info.title)
