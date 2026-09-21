@@ -2,13 +2,15 @@
 
 A powerful, lightweight Lua script for **MPV** that detects and skips media segments (intros, recaps, outros/credits, and previews) using crowdsourced timestamp data from **TheIntroDB**, **IntroDB**, and **SkipDB**.
 
-OSC by [ModernZ](https://github.com/Samillion/ModernZ).
+OSC by [ModernZ](https://github.com/Samillion/ModernZ)
 
 <img width="1920" height="1080" alt="Screenshot (123)" src="https://github.com/user-attachments/assets/56985e56-e17a-4786-a118-e9de9c653bee" />
 <img width="1920" height="1080" alt="Screenshot (127)" src="https://github.com/user-attachments/assets/409d74c4-fcfe-4b03-8c02-0f42351268c1" />
 
 > [!IMPORTANT]
-> **Colored Segments work only using a modified ModernZ or uosc** [Guide](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments).
+> **Colored Segments work only using a modified ModernZ or uosc**
+> 
+> [Guide](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments)
  
 <img width="24" height="24" alt="output-onlinepngtools" src="https://github.com/user-attachments/assets/7455cd12-811c-4446-b1d9-640f4ef13a61" /> Intro
 
@@ -19,13 +21,14 @@ OSC by [ModernZ](https://github.com/Samillion/ModernZ).
 <img width="24" height="24" alt="output-onlinepngtools (3)" src="https://github.com/user-attachments/assets/8e9ba2fd-bceb-4426-a26c-b0c3bbe367bc" /> Preview/Post-Credits
 
 
-All colors changeable in **modernz.conf** or **uosc.conf**
+All colors are changeable in **`modernz.conf`** or **`uosc.conf`**
 
 ---
 > [!NOTE]
 > ### You can check quarried segments in **Console**.
+> ### If the movie/TV show is not found, open an [Issue](https://github.com/ElectricArdvark/jumpskip/issues) to help improve detection.
 
-### My [MPV Config](https://github.com/ElectricArdvark/jumpskip/wiki/MPV-Config)
+### Checkout my [MPV Config](https://github.com/ElectricArdvark/jumpskip/wiki/MPV-Config)
 
 ---
 
@@ -69,25 +72,19 @@ All colors changeable in **modernz.conf** or **uosc.conf**
 
 ## Installation
 
-Download [jumpskip.lua](https://raw.githubusercontent.com/ElectricArdvark/jumpskip/main/jumpskip.lua) and [jumpskip.conf](https://raw.githubusercontent.com/ElectricArdvark/jumpskip/main/jumpskip.conf)
+1. Download [jumpskip.lua](https://raw.githubusercontent.com/ElectricArdvark/jumpskip/main/jumpskip.lua) and [jumpskip.conf](https://raw.githubusercontent.com/ElectricArdvark/jumpskip/main/jumpskip.conf)
 
-### For Portable mpv:
-1. Copy `jumpskip.lua` into your mpv `scripts` directory:
+2. Copy `jumpskip.lua` and `jumpskip.conf` into your mpv config directory
 
+ - For Portable mpv:
+  
    `mpv/portable_config/scripts/jumpskip.lua`
-   
-2. Copy `jumpskip.conf` into your mpv `script-opts` directory:
 
    `mpv/portable_config/script-opts/jumpskip.conf`
    
-
-### For Standard System mpv:
-- **Windows**:
-  - Script: `%APPDATA%\mpv\scripts\jumpskip.lua`
-  - Config: `%APPDATA%\mpv\script-opts\jumpskip.conf`
-- **Linux / macOS**:
-  - Script: `~/.config/mpv/scripts/jumpskip.lua`
-  - Config: `~/.config/mpv/script-opts/jumpskip.conf`
+ - For Standard System mpv:
+   - **Windows**: `%APPDATA%\mpv\scripts\jumpskip.lua`
+    - **Linux / macOS**: `~/.config/mpv/scripts/jumpskip.lua`
 
 ---
 
@@ -223,10 +220,9 @@ debug_mode=no
 ## TO-DO
 - [x] Add IntroDB movies.
 - [x] Add Per-media type, provider priority.
-- [x] Diifrent osc support.
+- [x] Add Colored segments support to other osc.
   - [x] uosc
 - [ ] Add AniSkip.
-- [ ] Add Colored segments support to other osc.
 
 ## Changelog
 
