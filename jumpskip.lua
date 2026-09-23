@@ -385,13 +385,11 @@ function TitleParser.validate_series_seasons(meta_videos, media_info)
         season_count = season_count + 1
     end
 
-    if season_count > 1 then
-        return false, season_count
-    end
+
 
     media_info.season = 1
     media_info.season_missing = false
-    return true, 1
+    return true, season_count
 end
 
 function TitleParser.score_movie_candidate(candidate, query_title, target_year, all_candidates)
@@ -564,11 +562,17 @@ function TitleParser.score_series_candidate(candidate, query_title, all_candidat
         total_q = total_q + 1
         if c_words[w] then match_count = match_count + 1 end
     end
+	
+	    local word_match_bonus = match_count * 10
 
     if total_q > 0 and match_count == total_q and c_extra == 0 then
-        return 800
+        return 800 + word_match_bonus
     elseif total_q > 0 and match_count == total_q and c_extra <= 1 then
-        return 400
+        return 400  + word_match_bonus
+    end
+
+    if match_count > 0 then
+        return word_match_bonus
     end
 
     return 0
@@ -634,7 +638,6 @@ function TitleParser.extract_media_metadata(path, filename, raw_media_title, met
 
         local s_title, s, e
         local season_missing = false
-        local numeric_suffix = nil
 
         s_title, s, e = fn_clean:match("^(.-)[%._%-%s%([]+[sS](%d%d?)[%._%-%s%]]*[eE](%d%d?%d?)")
 
@@ -701,28 +704,11 @@ function TitleParser.extract_media_metadata(path, filename, raw_media_title, met
             end
         end
 
-        if not s_title then
-            local st, ep = fn_clean:match("^(.-)[%s%._%-]+(%d%d?%d?)$")
-            if not st then
-                st, ep = fn_clean:match("^(.-)[%s%._%-]+(%d%d?%d?)[%s%._%-%)%]]")
-            end
-            if st and ep then
-                local num = tonumber(ep)
-                if num and num > 0 and num <= 999 and #st > 1 then
-                    numeric_suffix = num
-                    s_title = st
-                end
-            end
-        end
-
         if s_title and #s_title > 1 and s and e then
             info.is_tv = true
             info.season = tonumber(s)
             info.episode = tonumber(e)
             info.season_missing = season_missing
-            info.title = TitleParser.clean_title(s_title)
-        elseif numeric_suffix then
-            info.numeric_suffix = numeric_suffix
             info.title = TitleParser.clean_title(s_title)
         end
 
@@ -1058,166 +1044,125 @@ local function resolve_title_to_imdb(media_info, current_file_id, callback)
         return
     end
 
-    local has_numeric_suffix = media_info.numeric_suffix and not media_info.is_tv
-
-    local function perform_search(search_type, title, year, season, episode, season_missing, on_complete)
-        local endpoint = (search_type == "tv") and "search/tv" or "search/movie"
-        local catalog_type = (search_type == "tv") and "series" or "movie"
-        
-        if user_opts.tmdb_api_key and #user_opts.tmdb_api_key > 0 then
-            local url = string.format("https://api.themoviedb.org/3/%s?api_key=%s&query=%s",
-                endpoint, user_opts.tmdb_api_key, url_encode(title))
-            if year and search_type == "movie" then
-                url = url .. "&year=" .. tostring(year)
-            end
-
-            async_http_get(url, nil, 6, function(success, data, err)
-                if state.file_id ~= current_file_id then return end
-                if success and data and data.results and #data.results > 0 then
-                    local res1 = data.results[1]
-                    media_info.tmdb_id = res1.id
-                    log_info("Resolved title '%s' to TMDb ID %d via TMDb API (%s search)", title, media_info.tmdb_id, search_type)
-
-                    local function fetch_external_ids()
-                        local ext_type = (search_type == "tv") and "tv" or "movie"
-                        local ext_url = string.format("https://api.themoviedb.org/3/%s/%d/external_ids?api_key=%s",
-                            ext_type, media_info.tmdb_id, user_opts.tmdb_api_key)
-                        async_http_get(ext_url, nil, 4, function(ext_ok, ext_data, ext_err)
-                            if state.file_id ~= current_file_id then return end
-                            if ext_ok and ext_data and ext_data.imdb_id then
-                                media_info.imdb_id = ext_data.imdb_id
-                                log_info("Resolved TMDb ID %d to IMDb ID %s", media_info.tmdb_id, media_info.imdb_id)
-                            end
-                            on_complete(true)
-                        end)
-                    end
-
-                    if search_type == "tv" and season_missing then
-                        local tv_url = string.format("https://api.themoviedb.org/3/tv/%d?api_key=%s",
-                            media_info.tmdb_id, user_opts.tmdb_api_key)
-                        async_http_get(tv_url, nil, 4, function(tv_ok, tv_data)
-                            if state.file_id ~= current_file_id then return end
-                            if tv_ok and tv_data and tv_data.number_of_seasons and tv_data.number_of_seasons > 1 then
-                                log_warn("Show '%s' has %d seasons, but season was omitted in filename; rejecting ambiguous episode",
-                                    title, tv_data.number_of_seasons)
-                                on_complete(false)
-                                return
-                            else
-                                media_info.season = season or 1
-                                media_info.episode = episode
-                                media_info.season_missing = false
-                                media_info.is_tv = true
-                                fetch_external_ids()
-                            end
-                        end)
-                    else
-                        media_info.is_tv = (search_type == "tv")
-                        if search_type == "tv" then
-                            media_info.season = season or 1
-                            media_info.episode = episode
-                        end
-                        fetch_external_ids()
-                    end
-                else
-                    on_complete(false)
-                end
-            end)
-            return
+    if user_opts.tmdb_api_key and #user_opts.tmdb_api_key > 0 then
+        local endpoint = media_info.is_tv and "search/tv" or "search/movie"
+        local url = string.format("https://api.themoviedb.org/3/%s?api_key=%s&query=%s",
+            endpoint, user_opts.tmdb_api_key, url_encode(media_info.title))
+        if media_info.year and not media_info.is_tv then
+            url = url .. "&year=" .. tostring(media_info.year)
         end
-
-        local url = string.format("https://v3-cinemeta.strem.io/catalog/%s/top/search=%s.json",
-            catalog_type, url_encode(title))
 
         async_http_get(url, nil, 6, function(success, data, err)
             if state.file_id ~= current_file_id then return end
-            if success and data and data.metas and #data.metas > 0 then
-                local best_meta, best_score = nil, 0
-                for rank, m in ipairs(data.metas) do
-                    local score = 0
-                    if search_type == "tv" then
-                        score = TitleParser.score_series_candidate(m, title, data.metas)
-                    else
-                        score = TitleParser.score_movie_candidate(m, title, year, data.metas)
-                    end
-                    score = score - (rank - 1) * 0.5
-                    local cand_year = tonumber(m.year) or tonumber(m.releaseInfo)
-                    log_debug("Cinemeta candidate #%d '%s' (year=%s) score=%.1f",
-                        rank, m.name or "", tostring(cand_year), score)
-                    if score > best_score then
-                        best_score = score
-                        best_meta  = m
-                    end
-                end
+            if success and data and data.results and #data.results > 0 then
+                local res1 = data.results[1]
+                media_info.tmdb_id = res1.id
+                log_info("Resolved title '%s' to TMDb ID %d via TMDb API", media_info.title, media_info.tmdb_id)
 
-                local id = best_meta and (best_meta.imdb_id or best_meta.id)
-                if id and id:match("^tt%d+") and best_score >= 300 then
-                    if search_type == "tv" and season_missing then
-                        local meta_url = string.format("https://v3-cinemeta.strem.io/meta/series/%s.json", id)
-                        async_http_get(meta_url, nil, 6, function(meta_ok, meta_data, meta_err)
-                            if state.file_id ~= current_file_id then return end
-                            if meta_ok and meta_data and meta_data.meta then
-                                local ok, cnt = TitleParser.validate_series_seasons(meta_data.meta.videos, media_info)
-                                if not ok then
-                                    log_warn("Series '%s' has %d seasons, but season was omitted in filename; rejecting match to prevent wrong skip segments",
-                                        best_meta.name or "?", cnt)
-                                    on_complete(false)
-                                    return
-                                end
-                            end
-                            media_info.imdb_id = id
-                            media_info.is_tv = true
-                            media_info.season = season or 1
-                            media_info.episode = episode
-                            log_info("Resolved series '%s' (S%dE%d) to IMDb ID %s via Cinemeta (score=%.1f, name='%s')",
-                                title, media_info.season, media_info.episode,
-                                id, best_score, best_meta.name or "?")
-                            on_complete(true)
-                        end)
-                        return
-                    else
-                        media_info.imdb_id = id
-                        media_info.is_tv = (search_type == "tv")
-                        if search_type == "tv" then
-                            media_info.season = season or 1
-                            media_info.episode = episode
+                local function fetch_external_ids()
+                    local ext_type = media_info.is_tv and "tv" or "movie"
+                    local ext_url = string.format("https://api.themoviedb.org/3/%s/%d/external_ids?api_key=%s",
+                        ext_type, media_info.tmdb_id, user_opts.tmdb_api_key)
+                    async_http_get(ext_url, nil, 4, function(ext_ok, ext_data, ext_err)
+                        if state.file_id ~= current_file_id then return end
+                        if ext_ok and ext_data and ext_data.imdb_id then
+                            media_info.imdb_id = ext_data.imdb_id
+                            log_info("Resolved TMDb ID %d to IMDb ID %s", media_info.tmdb_id, media_info.imdb_id)
                         end
-                        log_info("Resolved title '%s'%s to IMDb ID %s via Cinemeta %s search (score=%.1f, name='%s')",
-                            title,
-                            year and (" (" .. tostring(year) .. ")") or "",
-                            id, search_type, best_score, best_meta.name or "?")
-                        on_complete(true)
-                        return
-                    end
+                        callback(true)
+                    end)
                 end
-            end
-            log_debug("Could not resolve title '%s' to an IMDb ID via Cinemeta (%s search)", title, search_type)
-            on_complete(false)
-        end)
-    end
 
-    if has_numeric_suffix then
-        log_info("Title '%s' has numeric suffix (%d) without episode marker; trying movie search first, then TV fallback",
-            media_info.title, media_info.numeric_suffix)
-        
-        perform_search("movie", media_info.title, media_info.year, nil, nil, false, function(movie_found)
-            if state.file_id ~= current_file_id then return end
-            if movie_found then
-                callback(true)
+                if media_info.is_tv and media_info.season_missing then
+                    local tv_url = string.format("https://api.themoviedb.org/3/tv/%d?api_key=%s",
+                        media_info.tmdb_id, user_opts.tmdb_api_key)
+                    async_http_get(tv_url, nil, 4, function(tv_ok, tv_data)
+                        if state.file_id ~= current_file_id then return end
+                        if tv_ok and tv_data and tv_data.number_of_seasons and tv_data.number_of_seasons > 1 then
+                            log_warn("Show '%s' has %d seasons, but season was omitted in filename; rejecting ambiguous episode",
+                                media_info.title, tv_data.number_of_seasons)
+                            callback(false)
+                            return
+                        else
+                            media_info.season = 1
+                            media_info.season_missing = false
+                            fetch_external_ids()
+                        end
+                    end)
+                else
+                    fetch_external_ids()
+                end
             else
-                log_info("Movie search returned no results for '%s'; falling back to TV show search", media_info.title)
-                perform_search("tv", media_info.title, nil, 1, media_info.numeric_suffix, true, function(tv_found)
-                    if state.file_id ~= current_file_id then return end
-                    callback(tv_found)
-                end)
+                callback(media_info.tmdb_id ~= nil or media_info.tvdb_id ~= nil)
             end
         end)
         return
     end
 
-    local search_type = media_info.is_tv and "tv" or "movie"
-    perform_search(search_type, media_info.title, media_info.year, media_info.season, media_info.episode, media_info.season_missing, function(found)
+    local catalog_type = media_info.is_tv and "series" or "movie"
+    local url = string.format("https://v3-cinemeta.strem.io/catalog/%s/top/search=%s.json",
+        catalog_type, url_encode(media_info.title))
+
+    async_http_get(url, nil, 6, function(success, data, err)
         if state.file_id ~= current_file_id then return end
-        callback(found)
+        if success and data and data.metas and #data.metas > 0 then
+            local best_meta, best_score = nil, 0
+            for rank, m in ipairs(data.metas) do
+                local score = 0
+                if media_info.is_tv then
+                    score = TitleParser.score_series_candidate(m, media_info.title, data.metas)
+                else
+                    score = TitleParser.score_movie_candidate(m, media_info.title, media_info.year, data.metas)
+                end
+                score = score - (rank - 1) * 0.5
+                local cand_year = tonumber(m.year) or tonumber(m.releaseInfo)
+                log_debug("Cinemeta candidate #%d '%s' (year=%s) score=%.1f",
+                    rank, m.name or "", tostring(cand_year), score)
+                if score > best_score then
+                    best_score = score
+                    best_meta  = m
+                end
+            end
+
+            local id = best_meta and (best_meta.imdb_id or best_meta.id)
+            local min_score = 300
+            if #data.metas == 1 then
+                min_score = 10
+            end
+            if id and id:match("^tt%d+") and best_score >= min_score then
+                if media_info.is_tv and media_info.season_missing then
+                    local meta_url = string.format("https://v3-cinemeta.strem.io/meta/series/%s.json", id)
+                    async_http_get(meta_url, nil, 6, function(meta_ok, meta_data, meta_err)
+                        if state.file_id ~= current_file_id then return end
+                        if meta_ok and meta_data and meta_data.meta then
+                            local ok, cnt = TitleParser.validate_series_seasons(meta_data.meta.videos, media_info)
+                            if not ok then
+                                log_warn("Series '%s' has %d seasons, but season was omitted in filename; rejecting match to prevent wrong skip segments",
+                                    best_meta.name or "?", cnt)
+                                callback(false)
+                                return
+                            end
+                        end
+                        media_info.imdb_id = id
+                        log_info("Resolved series '%s' (S%dE%d) to IMDb ID %s via Cinemeta (score=%.1f, name='%s')",
+                            media_info.title, media_info.season or 1, media_info.episode or 1,
+                            id, best_score, best_meta.name or "?")
+                        callback(true)
+                    end)
+                    return
+                else
+                    media_info.imdb_id = id
+                    log_info("Resolved title '%s'%s to IMDb ID %s via Cinemeta (score=%.1f, name='%s')",
+                        media_info.title,
+                        media_info.year and (" (" .. tostring(media_info.year) .. ")") or "",
+                        id, best_score, best_meta.name or "?")
+                    callback(true)
+                    return
+                end
+            end
+        end
+        log_debug("Could not resolve title '%s' to an IMDb ID via Cinemeta", media_info.title)
+        callback(media_info.tmdb_id ~= nil or media_info.tvdb_id ~= nil)
     end)
 end
 
