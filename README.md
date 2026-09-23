@@ -47,6 +47,9 @@ All colors are changeable in **`modernz.conf`** or **`uosc.conf`**
   - Requires modified [ModernZ](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments) or [uosc](https://github.com/ElectricArdvark/jumpskip/wiki/Colored-Segments)
 - **Interactive On-Screen Clickable Button**:
   - Semi-transparent vector card (ASS overlay) (`Skip Intro ▶`, `Skip Outro ▶`, etc.).
+- **Interactive On-Screen Clickable Timestamps Submission Interface**:
+  - An interactive interface letting you submit timestamps directly from within mpv, eliminating the need for manual data entry (default: `Ctrl+q`). [Preview](https://github.com/user-attachments/assets/bd35cd66-1388-40ff-aea6-eedd2dd0e963)
+  - Requires a provider API key.
 - **Chapter-based skipping**:
   - Automatically skips chapters based on title (eg. "OP" or "Outro", "Recap" etc.).
 - **Keyboard Shortcut**:
@@ -233,6 +236,7 @@ debug_mode=no
 - [x] Add IntroDB movies.
 - [x] Add Per-media type, provider priority.
 - [x] Add Colored segments support to other osc.
+- [x] Add Timestamps Submission.
   - [x] uosc
 - [ ] Add AniSkip.
 
