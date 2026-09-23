@@ -1,6 +1,6 @@
 --[[
     mpv-skip-segment
-    version 1.8
+    version 1.9
     ================
     A Lua script for mpv that detects and skips segments (intros, recaps, outros/credits, previews,
     and movie end-credits/post-credits) using crowdsourced data from TheIntroDB (api.theintrodb.org),
@@ -74,6 +74,11 @@ local user_opts = {
     request_timeout      = 8,
     keybind              = "Tab",
     min_segment_duration = 3.0,
+    enable_submission           = true,
+    submission_keybind          = "Ctrl+Q",
+    theintrodb_submit_enabled   = true,
+    introdb_submit_enabled      = true,
+    skipdb_submit_enabled       = true,
     button_position      = "bottom-right",
     button_margin_x      = 60,
     button_margin_y      = 80,
@@ -117,7 +122,11 @@ local function log_debug(msg, ...)
 end
 
 local current_bound_key = nil
+local current_submission_bound_key = nil
 local perform_skip
+local toggle_submission_overlay
+local render_submission_overlay
+local close_submission_overlay
 
 local function update_keybind()
     if current_bound_key then
@@ -128,6 +137,18 @@ local function update_keybind()
             if perform_skip then perform_skip() end
         end)
         current_bound_key = user_opts.keybind
+    end
+end
+
+local function update_submission_keybind()
+    if current_submission_bound_key then
+        mp.remove_key_binding("jumpskip_submit")
+    end
+    if user_opts.submission_keybind and #user_opts.submission_keybind > 0 then
+        mp.add_key_binding(user_opts.submission_keybind, "jumpskip_submit", function()
+            toggle_submission_overlay()
+        end)
+        current_submission_bound_key = user_opts.submission_keybind
     end
 end
 
@@ -228,6 +249,7 @@ local function load_configuration()
 
     validate_options()
     update_keybind()
+    update_submission_keybind()
     log_info("Configuration active (keybind: %s, auto_skip: %s, tv_priority: %s, movie_priority: %s)%s",
         tostring(user_opts.keybind), tostring(user_opts.auto_skip),
         tostring(user_opts.provider_priority_tvshow), tostring(user_opts.provider_priority_movie),
@@ -967,6 +989,22 @@ local state = {
     display_h            = 1080,
     box                  = { x1 = 0, y1 = 0, x2 = 0, y2 = 0 },
     overlay              = nil,
+    submission_overlay   = nil,
+    submission_visible   = false,
+    submission_data      = {
+        segment_type = "intro",
+        start_sec = nil,
+        end_sec = nil,
+        status = "",
+        status_color = "FFFFFF",
+        submitting = false,
+    },
+    submission_selected_field = "segment_type",
+    submission_keybinds_active = false,
+    submission_status_timer = nil,
+    submission_buttons = {},
+    submission_hover = nil,
+    submission_mbtn_bound = false,
 }
 
 local function extract_media_metadata()
@@ -1029,6 +1067,71 @@ local function async_http_get(url, headers, timeout_sec, callback)
             return
         end
         callback(true, parsed, nil)
+    end)
+end
+
+local function async_http_post(url, headers, data, timeout_sec, callback)
+    local json_data = utils.format_json(data)
+    local status_file = os.tmpname()
+    local args = {
+        "curl", "-s", "-S",
+        "--max-time",        tostring(timeout_sec or user_opts.request_timeout),
+        "--connect-timeout", "4",
+        "-H", "User-Agent: mpv-skip-segment/1.0",
+        "-H", "Accept: application/json",
+        "-H", "Content-Type: application/json",
+        "-X", "POST",
+        "-d", json_data,
+        "-w", "%{http_code}",
+        "-o", status_file,
+    }
+
+    if headers then
+        for _, h in ipairs(headers) do
+            table.insert(args, "-H")
+            table.insert(args, h)
+        end
+    end
+
+    table.insert(args, url)
+    log_debug("HTTP POST: %s", url)
+
+    mp.command_native_async({
+        name           = "subprocess",
+        args           = args,
+        capture_stdout = true,
+        capture_stderr = true,
+        playback_only  = false,
+    }, function(success, res, err)
+        local http_code = 0
+        if res and res.stdout then
+            http_code = tonumber(res.stdout:match("%d+")) or 0
+        end
+        local body = ""
+        local f = io.open(status_file, "r")
+        if f then
+            body = f:read("*a") or ""
+            f:close()
+            os.remove(status_file)
+        end
+        if not success or not res then
+            log_debug("curl execution error: %s", tostring(err))
+            callback(false, nil, err or "curl execution failed", http_code)
+            return
+        end
+        if res.status ~= 0 then
+            local err_msg = string.format("curl error (exit code %d): %s", res.status, res.stderr or "")
+            log_debug("%s", err_msg)
+            callback(false, nil, err_msg, http_code)
+            return
+        end
+        local parsed, parse_err = utils.parse_json(body)
+        if parse_err or not parsed then
+            log_debug("JSON parse error from %s: %s", url, tostring(parse_err))
+            callback(false, body, "invalid JSON: " .. tostring(parse_err), http_code)
+            return
+        end
+        callback(true, parsed, nil, http_code)
     end)
 end
 
@@ -1351,6 +1454,729 @@ local provider_fns = {
     introdb    = query_introdb,
     skipdb     = query_skipdb,
 }
+
+local SUBMISSION_SEGMENT_TYPES = {
+    intro         = { theintrodb = "intro",    introdb = "intro",    skipdb = "intro" },
+    recap         = { theintrodb = "recap",    introdb = "recap",    skipdb = "recap" },
+    outro         = { theintrodb = "credits",  introdb = "outro",    skipdb = "outro" },
+    preview       = { theintrodb = "preview",  introdb = nil,        skipdb = "preview" },
+    post_credits  = { theintrodb = nil,        introdb = "post-credits", skipdb = nil },
+}
+
+local SEGMENT_DURATION_LIMITS = {
+    intro        = { min = 5,   max = 200 },
+    recap        = { min = 5,   max = 1200 },
+    outro        = { min = 5,   max = 1800 },
+    preview      = { min = 5,   max = 1800 },
+    post_credits = { min = 5,   max = 1800 },
+}
+
+local function format_media_title(media_info)
+    local title = media_info.title or "Unknown"
+    if media_info.is_tv and media_info.season and media_info.episode then
+        title = string.format("%s Season %d Episode %d", title, media_info.season, media_info.episode)
+    end
+    return title
+end
+
+local function validate_submission_data(data)
+    local seg_type = data.segment_type
+    local start_sec = data.start_sec
+    local end_sec = data.end_sec
+    
+    if not seg_type or not VALID_SEGMENT_TYPES[seg_type] then
+        return false, "Invalid segment type"
+    end
+    
+    if start_sec == nil or end_sec == nil then
+        return false, "Start and end times are required"
+    end
+    
+    if start_sec < 0 or end_sec < 0 then
+        return false, "Times cannot be negative"
+    end
+    
+    if start_sec >= end_sec then
+        return false, "Start time must be before end time"
+    end
+    
+    local duration = end_sec - start_sec
+    local limits = SEGMENT_DURATION_LIMITS[seg_type]
+    if limits then
+        if duration < limits.min then
+            return false, string.format("Segment too short (minimum %ds for %s)", limits.min, seg_type)
+        end
+        if duration > limits.max then
+            return false, string.format("Segment too long (maximum %ds for %s)", limits.max, seg_type)
+        end
+    end
+    
+    if end_sec > 21600 then
+        return false, "Times cannot exceed 6 hours"
+    end
+    
+    return true, nil
+end
+
+local function interpret_submission_error(http_code, err, provider)
+    if http_code and http_code > 0 then
+        if http_code == 401 or http_code == 403 then
+            return string.format("%s: Invalid API key (HTTP %d)", provider, http_code)
+        elseif http_code == 400 or http_code == 422 then
+            return string.format("%s: Validation error (HTTP %d): %s", provider, http_code, tostring(err or ""))
+        elseif http_code == 409 then
+            return string.format("%s: Already submitted (HTTP %d)", provider, http_code)
+        elseif http_code == 429 then
+            return string.format("%s: Rate limited (HTTP 429), retry later", provider)
+        elseif http_code >= 500 then
+            return string.format("%s: Server error (HTTP %d)", provider, http_code)
+        else
+            return string.format("%s: Submission failed (HTTP %d): %s", provider, http_code, tostring(err or ""))
+        end
+    end
+    return string.format("%s: %s", provider, tostring(err or "submission failed"))
+end
+
+local function submit_to_theintrodb(media_info, submission_data, callback)
+    if not user_opts.theintrodb_submit_enabled or not user_opts.theintrodb_api_key or #user_opts.theintrodb_api_key == 0 then
+        callback(false, "TheIntroDB submission disabled or no API key")
+        return
+    end
+    
+    local seg_type = SUBMISSION_SEGMENT_TYPES[submission_data.segment_type].theintrodb
+    if not seg_type then
+        callback(false, "Segment type not supported by TheIntroDB")
+        return
+    end
+    
+    if not media_info.tmdb_id then
+        callback(false, "TheIntroDB requires TMDB ID")
+        return
+    end
+    
+    local body = {
+        tmdb_id = media_info.tmdb_id,
+        type = media_info.is_tv and "tv" or "movie",
+        segment = seg_type,
+        start_sec = submission_data.start_sec,
+        end_sec = submission_data.end_sec,
+        video_duration_ms = state.duration > 0 and round(state.duration * 1000) or nil,
+    }
+    
+    if media_info.is_tv then
+        body.season = media_info.season
+        body.episode = media_info.episode
+    end
+    
+    if media_info.imdb_id then
+        body.imdb_id = media_info.imdb_id
+    end
+    
+    local headers = build_auth_header(user_opts.theintrodb_api_key, "Authorization: Bearer ")
+    local url = "https://api.theintrodb.org/v3/submit"
+    
+    async_http_post(url, headers, body, user_opts.request_timeout, function(success, data, err, http_code)
+        if success then
+            callback(true, data)
+        else
+            callback(false, interpret_submission_error(http_code, err, "TheIntroDB"))
+        end
+    end)
+end
+
+local function submit_to_introdb(media_info, submission_data, callback)
+    if not user_opts.introdb_submit_enabled or not user_opts.introdb_api_key or #user_opts.introdb_api_key == 0 then
+        callback(false, "IntroDB submission disabled or no API key")
+        return
+    end
+    
+    local seg_type = SUBMISSION_SEGMENT_TYPES[submission_data.segment_type].introdb
+    if not seg_type then
+        callback(false, "Segment type not supported by IntroDB")
+        return
+    end
+    
+    if seg_type == "post-credits" and media_info.is_tv then
+        callback(false, "Post-credits only supported for movies on IntroDB")
+        return
+    end
+    
+    if not media_info.imdb_id then
+        callback(false, "IntroDB requires IMDb ID")
+        return
+    end
+    
+    local body = {
+        segment_type = seg_type,
+        imdb_id = media_info.imdb_id,
+        start_sec = submission_data.start_sec,
+        end_sec = submission_data.end_sec,
+    }
+    
+    if media_info.is_tv then
+        body.is_movie = false
+        body.season = media_info.season
+        body.episode = media_info.episode
+    else
+        body.is_movie = true
+    end
+    
+    if media_info.tvdb_id then
+        body.tvdb_id = media_info.tvdb_id
+    end
+    if media_info.tmdb_id then
+        body.tmdb_id = media_info.tmdb_id
+    end
+    
+    local headers = build_auth_header(user_opts.introdb_api_key, "X-API-Key: ")
+    local url = "https://api.introdb.app/submit"
+    
+    async_http_post(url, headers, body, user_opts.request_timeout, function(success, data, err, http_code)
+        if success then
+            callback(true, data)
+        else
+            callback(false, interpret_submission_error(http_code, err, "IntroDB"))
+        end
+    end)
+end
+
+local function submit_to_skipdb(media_info, submission_data, callback)
+    if not user_opts.skipdb_submit_enabled or not user_opts.skipdb_api_key or #user_opts.skipdb_api_key == 0 then
+        callback(false, "SkipDB submission disabled or no API key")
+        return
+    end
+    
+    local seg_type = SUBMISSION_SEGMENT_TYPES[submission_data.segment_type].skipdb
+    if not seg_type then
+        callback(false, "Segment type not supported by SkipDB")
+        return
+    end
+    
+    if not media_info.imdb_id then
+        callback(false, "SkipDB requires IMDb ID")
+        return
+    end
+    
+    local body = {
+        imdb_id = media_info.imdb_id,
+        segment_type = seg_type,
+        start_ms = round(submission_data.start_sec * 1000),
+        end_ms = round(submission_data.end_sec * 1000),
+        duration_ms = state.duration > 0 and round(state.duration * 1000) or nil,
+    }
+    
+    if media_info.is_tv then
+        body.season = media_info.season
+        body.episode = media_info.episode
+    end
+    
+    local headers = build_auth_header(user_opts.skipdb_api_key, "Authorization: Bearer ")
+    local url = "https://api.skipdb.tv/api/segments"
+    
+    async_http_post(url, headers, body, user_opts.request_timeout, function(success, data, err, http_code)
+        if success then
+            callback(true, data)
+        else
+            callback(false, interpret_submission_error(http_code, err, "SkipDB"))
+        end
+    end)
+end
+
+local function submit_to_all_providers(media_info, submission_data, callback)
+    local results = {}
+    local pending = 0
+    
+    local function check_done()
+        pending = pending - 1
+        if pending == 0 then
+            callback(results)
+        end
+    end
+    
+    if user_opts.theintrodb_submit_enabled and user_opts.theintrodb_api_key and #user_opts.theintrodb_api_key > 0 then
+        pending = pending + 1
+        submit_to_theintrodb(media_info, submission_data, function(success, data)
+            results.theintrodb = { success = success, data = data }
+            check_done()
+        end)
+    end
+    
+    if user_opts.introdb_submit_enabled and user_opts.introdb_api_key and #user_opts.introdb_api_key > 0 then
+        pending = pending + 1
+        submit_to_introdb(media_info, submission_data, function(success, data)
+            results.introdb = { success = success, data = data }
+            check_done()
+        end)
+    end
+    
+    if user_opts.skipdb_submit_enabled and user_opts.skipdb_api_key and #user_opts.skipdb_api_key > 0 then
+        pending = pending + 1
+        submit_to_skipdb(media_info, submission_data, function(success, data)
+            results.skipdb = { success = success, data = data }
+            check_done()
+        end)
+    end
+    
+    if pending == 0 then
+        callback({})
+    end
+end
+
+local SUBMISSION_TYPE_ORDER = { "intro", "recap", "outro", "preview", "post_credits" }
+
+local SUBMISSION_TYPE_LABELS = {
+    intro        = "Intro",
+    recap        = "Recap",
+    outro        = "Outro",
+    preview      = "Preview",
+    post_credits = "Post-Credits",
+}
+
+local function format_submission_time(sec)
+    if type(sec) ~= "number" or sec ~= sec or sec < 0 then
+        return "--:--:--"
+    end
+    return format_hms(sec)
+end
+
+local function cycle_submission_segment_type()
+    local order = SUBMISSION_TYPE_ORDER
+    local current = state.submission_data.segment_type
+    local idx = 1
+    for i, t in ipairs(order) do
+        if t == current then
+            idx = i
+            break
+        end
+    end
+    local next_type = order[(idx % #order) + 1]
+    state.submission_data.segment_type = next_type
+    state.submission_data.status = ""
+    state.submission_data.status_color = "FFFFFF"
+    render_submission_overlay()
+end
+
+local function submission_set_start()
+    local t = mp.get_property_number("time-pos")
+    if t == nil then
+        state.submission_data.status = "No playback position available"
+        state.submission_data.status_color = "E75C6C"
+    else
+        state.submission_data.start_sec = t
+        state.submission_data.status = ""
+        state.submission_data.status_color = "FFFFFF"
+    end
+    render_submission_overlay()
+end
+
+local function submission_set_end()
+    local t = mp.get_property_number("time-pos")
+    if t == nil then
+        state.submission_data.status = "No playback position available"
+        state.submission_data.status_color = "E75C6C"
+    else
+        state.submission_data.end_sec = t
+        state.submission_data.status = ""
+        state.submission_data.status_color = "FFFFFF"
+    end
+    render_submission_overlay()
+end
+
+local function submission_submit()
+    if state.submission_data.submitting then
+        return
+    end
+    local data = state.submission_data
+    local ok, err = validate_submission_data(data)
+    if not ok then
+        data.status = err or "Invalid submission"
+        data.status_color = "E75C6C"
+        render_submission_overlay()
+        return
+    end
+    if not state.media_info then
+        data.status = "No media information available"
+        data.status_color = "E75C6C"
+        render_submission_overlay()
+        return
+    end
+    if state.media_info.is_tv and (not state.media_info.season or not state.media_info.episode) then
+        data.status = "TV show requires season and episode information"
+        data.status_color = "E75C6C"
+        render_submission_overlay()
+        return
+    end
+    data.submitting = true
+    data.status = "Submitting..."
+    data.status_color = "FFD700"
+    render_submission_overlay()
+    submit_to_all_providers(state.media_info, data, function(results)
+        data.submitting = false
+        local success_count = 0
+        local total = 0
+        local messages = {}
+        for provider, res in pairs(results) do
+            total = total + 1
+            if res.success then
+                success_count = success_count + 1
+            else
+                table.insert(messages, provider .. ": " .. tostring(res.data))
+            end
+        end
+        if total == 0 then
+            data.status = "No providers enabled (check API keys)"
+            data.status_color = "E75C6C"
+        elseif success_count == total then
+            data.status = "Submitted successfully to all providers"
+            data.status_color = "7CFC00"
+        else
+            data.status = string.format("Submitted to %d/%d providers", success_count, total)
+            data.status_color = "FFA500"
+            if #messages > 0 then
+                data.status = data.status .. " | " .. table.concat(messages, " | ")
+            end
+        end
+        render_submission_overlay()
+        if success_count == total and total > 0 then
+            if state.submission_status_timer then state.submission_status_timer:kill() end
+            state.submission_status_timer = mp.add_timeout(3.0, function()
+                state.submission_status_timer = nil
+                if state.submission_visible then
+                    data.status = ""
+                    data.status_color = "FFFFFF"
+                    render_submission_overlay()
+                end
+            end)
+        end
+    end)
+end
+
+close_submission_overlay = function()
+    if not state.submission_visible then
+        return
+    end
+    state.submission_visible = false
+    if state.submission_status_timer then
+        state.submission_status_timer:kill()
+        state.submission_status_timer = nil
+    end
+    if state.submission_overlay then
+        state.submission_overlay.data = ""
+        state.submission_overlay:update()
+    end
+    if state.submission_keybinds_active then
+        mp.remove_key_binding("jumpskip_submit_f1")
+        mp.remove_key_binding("jumpskip_submit_f2")
+        mp.remove_key_binding("jumpskip_submit_f")
+        mp.remove_key_binding("jumpskip_submit_enter")
+        mp.remove_key_binding("jumpskip_submit_esc")
+        state.submission_keybinds_active = false
+    end
+    if state.submission_mbtn_bound then
+        mp.remove_key_binding("jumpskip_submit_click")
+        state.submission_mbtn_bound = false
+    end
+    state.submission_hover = nil
+    state.submission_buttons = {}
+end
+
+local function open_submission_overlay()
+    if not user_opts.enable_submission then
+        mp.osd_message("Segment submission is disabled", 2)
+        return
+    end
+    if not state.media_info then
+        state.media_info = extract_media_metadata()
+    end
+    state.submission_visible = true
+    state.submission_data.status = ""
+    state.submission_data.status_color = "FFFFFF"
+    if not state.submission_overlay then
+        state.submission_overlay = mp.create_osd_overlay("ass-events")
+    end
+    if not state.submission_keybinds_active then
+        mp.add_forced_key_binding("F1", "jumpskip_submit_f1", submission_set_start)
+        mp.add_forced_key_binding("F2", "jumpskip_submit_f2", submission_set_end)
+        mp.add_forced_key_binding("f", "jumpskip_submit_f", cycle_submission_segment_type)
+        mp.add_forced_key_binding("ENTER", "jumpskip_submit_enter", submission_submit)
+        mp.add_forced_key_binding("ESC", "jumpskip_submit_esc", close_submission_overlay)
+        state.submission_keybinds_active = true
+    end
+    render_submission_overlay()
+end
+
+toggle_submission_overlay = function()
+    if state.submission_visible then
+        close_submission_overlay()
+    else
+        open_submission_overlay()
+    end
+end
+
+local function submission_render_button(ass, id, x1, y1, x2, y2, label, accent, hovered, selected)
+    local radius = 8
+    local bg_color = selected and accent or (hovered and "3A3A3A" or "1E1E1E")
+    local border_color = (selected or hovered) and accent or "555555"
+    local text_color = (selected or hovered) and "FFFFFF" or "DDDDDD"
+
+    ass:new_event()
+    ass:pos(x1, y1)
+    ass:append(string.format("{\\an7\\bord0\\shad0\\1c&H%s&\\alpha&H00&\\p1}", bg_color))
+    ass:draw_start()
+    ass:round_rect_cw(0, 0, x2 - x1, y2 - y1, radius)
+    ass:draw_stop()
+
+    ass:new_event()
+    ass:pos(x1, y1)
+    ass:append(string.format("{\\an7\\bord0\\shad0\\1c&H%s&\\alpha&H00&\\p1}", border_color))
+    ass:draw_start()
+    ass:round_rect_cw(1, 1, (x2 - x1) - 1, (y2 - y1) - 1, radius)
+    ass:draw_stop()
+
+    local cx = (x1 + x2) / 2
+    local cy = (y1 + y2) / 2
+    ass:new_event()
+    ass:pos(cx, cy)
+    ass:append(string.format("{\\an5\\bord0\\shad0\\fs18\\1c&H%s&}", text_color))
+    ass:append(label)
+
+    return { id = id, x1 = x1, y1 = y1, x2 = x2, y2 = y2 }
+end
+
+render_submission_overlay = function()
+    if not state.submission_visible then
+        return
+    end
+    if not state.submission_overlay then
+        state.submission_overlay = mp.create_osd_overlay("ass-events")
+    end
+
+    local w = state.display_w
+    local h = state.display_h
+    local ass = assdraw.ass_new()
+
+    local box_w = 640
+    local box_h = 400
+    local box_x = (w - box_w) / 2
+    local box_y = (h - box_h) / 2
+
+    local bg_alpha = opacity_to_alpha(0.85)
+    local border_alpha = opacity_to_alpha(0.0)
+
+    ass:new_event()
+    ass:pos(box_x, box_y)
+    ass:append(string.format("{\\an7\\bord0\\shad0\\1c&H%s&\\alpha&H%s&\\p1}", "0A0A0A", bg_alpha))
+    ass:draw_start()
+    ass:rect_cw(0, 0, box_w, box_h)
+    ass:draw_stop()
+
+    ass:new_event()
+    ass:pos(box_x, box_y)
+    ass:append(string.format("{\\an7\\bord0\\shad0\\1c&H%s&\\alpha&H%s&\\p1}", "E75C6C", border_alpha))
+    ass:draw_start()
+    ass:rect_cw(0, 0, box_w, 3)
+    ass:rect_cw(0, box_h - 3, box_w, box_h)
+    ass:rect_cw(0, 0, 3, box_h)
+    ass:rect_cw(box_w - 3, 0, box_w, box_h)
+    ass:draw_stop()
+
+    local margin = 24
+    local cx = box_x + box_w / 2
+    local y = margin
+
+    local media_info = state.media_info
+    local media_title = media_info and format_media_title(media_info) or "Unknown"
+    local data = state.submission_data
+    local hover = state.submission_hover
+
+    local buttons = {}
+
+    local close_btn = 26
+    table.insert(buttons, submission_render_button(ass, "close",
+        box_x + box_w - margin - close_btn, box_y + margin,
+        box_x + box_w - margin, box_y + margin + close_btn,
+        "✕", "E75C6C", hover == "close"))
+
+    ass:new_event()
+    ass:pos(cx, box_y + y)
+    ass:append(string.format("{\\an8\\bord0\\shad0\\fs22\\1c&H%s&}", "FFFFFF"))
+    ass:append(media_title)
+    y = y + 30
+
+    local id_parts = {}
+    if media_info and media_info.imdb_id then
+        table.insert(id_parts, "IMDB: " .. media_info.imdb_id)
+    end
+    if media_info and media_info.tmdb_id then
+        table.insert(id_parts, "TMDB: " .. media_info.tmdb_id)
+    end
+    if #id_parts > 0 then
+        ass:new_event()
+        ass:pos(cx, box_y + y)
+        ass:append(string.format("{\\an8\\bord0\\shad0\\fs16\\1c&H%s&}", "888888"))
+        ass:append(table.concat(id_parts, "    "))
+        y = y + 26
+    end
+
+    ass:new_event()
+    ass:pos(box_x, box_y + y)
+    ass:append(string.format("{\\an7\\bord0\\shad0\\1c&H%s&\\alpha&H00&\\p1}", "333333"))
+    ass:draw_start()
+    ass:rect_cw(0, 0, box_w, 1)
+    ass:draw_stop()
+    y = y + 24
+
+    ass:new_event()
+    ass:pos(cx, box_y + y)
+    ass:append(string.format("{\\an8\\bord0\\shad0\\fs18\\1c&H%s&}", "AAAAAA"))
+    ass:append("Segment Type (F)")
+    y = y + 34
+
+    local seg_btn_h = 30
+    local seg_gap = 10
+    local seg_btn_w = 150
+    local row1_types = { "intro", "recap", "outro" }
+    local row1_w = #row1_types * seg_btn_w + (#row1_types - 1) * seg_gap
+    local row1_x = cx - row1_w / 2
+    local seg_btn_y1 = box_y + y
+    local seg_btn_y2 = seg_btn_y1 + seg_btn_h
+    for i, seg_type in ipairs(row1_types) do
+        local seg_x1 = row1_x + (i - 1) * (seg_btn_w + seg_gap)
+        local seg_x2 = seg_x1 + seg_btn_w
+        local is_selected = (data.segment_type == seg_type)
+        local is_hovered = (hover == ("seg_" .. seg_type))
+        table.insert(buttons, submission_render_button(ass, "seg_" .. seg_type,
+            seg_x1, seg_btn_y1, seg_x2, seg_btn_y2,
+            SUBMISSION_TYPE_LABELS[seg_type] or seg_type,
+            "E75C6C", is_hovered, is_selected))
+    end
+    y = y + seg_btn_h + 10
+
+    local row2_types = { "preview", "post_credits" }
+    local row2_w = #row2_types * seg_btn_w + (#row2_types - 1) * seg_gap
+    local row2_x = cx - row2_w / 2
+    local seg_btn_y1 = box_y + y
+    local seg_btn_y2 = seg_btn_y1 + seg_btn_h
+    for i, seg_type in ipairs(row2_types) do
+        local seg_x1 = row2_x + (i - 1) * (seg_btn_w + seg_gap)
+        local seg_x2 = seg_x1 + seg_btn_w
+        local is_selected = (data.segment_type == seg_type)
+        local is_hovered = (hover == ("seg_" .. seg_type))
+        table.insert(buttons, submission_render_button(ass, "seg_" .. seg_type,
+            seg_x1, seg_btn_y1, seg_x2, seg_btn_y2,
+            SUBMISSION_TYPE_LABELS[seg_type] or seg_type,
+            "E75C6C", is_hovered, is_selected))
+    end
+    y = y + seg_btn_h + 24
+
+    local time_btn_w = 210
+    local time_btn_h = 34
+    local time_gap = 20
+    local time_row_w = 2 * time_btn_w + time_gap
+    local time_row_x = cx - time_row_w / 2
+    local time_btn_y1 = box_y + y
+    local time_btn_y2 = time_btn_y1 + time_btn_h
+    table.insert(buttons, submission_render_button(ass, "set_start",
+        time_row_x, time_btn_y1, time_row_x + time_btn_w, time_btn_y2,
+        "Set Start Time (F1)", "4C9AFF", hover == "set_start"))
+    table.insert(buttons, submission_render_button(ass, "set_end",
+        time_row_x + time_btn_w + time_gap, time_btn_y1, time_row_x + 2 * time_btn_w + time_gap, time_btn_y2,
+        "Set End Time (F2)", "4C9AFF", hover == "set_end"))
+    y = y + time_btn_h + 8
+
+    local start_cx = time_row_x + time_btn_w / 2
+    local end_cx = time_row_x + time_btn_w + time_gap + time_btn_w / 2
+    ass:new_event()
+    ass:pos(start_cx, box_y + y)
+    ass:append(string.format("{\\an8\\bord0\\shad0\\fs18\\1c&H%s&}", "FFFFFF"))
+    ass:append(format_submission_time(data.start_sec))
+    ass:new_event()
+    ass:pos(end_cx, box_y + y)
+    ass:append(string.format("{\\an8\\bord0\\shad0\\fs18\\1c&H%s&}", "FFFFFF"))
+    ass:append(format_submission_time(data.end_sec))
+    y = y + 30
+
+    local submit_w = 200
+    local submit_h = 36
+    local submit_x1 = cx - submit_w / 2
+    local submit_y1 = box_y + y
+    table.insert(buttons, submission_render_button(ass, "submit",
+        submit_x1, submit_y1, submit_x1 + submit_w, submit_y1 + submit_h,
+        "Submit", "2ECC71", hover == "submit"))
+    y = y + submit_h + 20
+
+    if data.status and #data.status > 0 then
+        ass:new_event()
+        ass:pos(cx, box_y + y)
+        ass:append(string.format("{\\an8\\bord0\\shad0\\fs16\\1c&H%s&}", data.status_color))
+        ass:append(data.status)
+    end
+
+    state.submission_buttons = buttons
+    state.submission_overlay.res_x = state.display_w
+    state.submission_overlay.res_y = state.display_h
+    state.submission_overlay.data = ass.text
+    state.submission_overlay:update()
+end
+
+local function submission_handle_click()
+    if not state.submission_visible then
+        return
+    end
+    local id = state.submission_hover
+    if not id then
+        return
+    end
+    if id == "set_start" then
+        submission_set_start()
+    elseif id == "set_end" then
+        submission_set_end()
+    elseif id == "submit" then
+        submission_submit()
+    elseif id == "close" then
+        close_submission_overlay()
+    elseif id:sub(1, 4) == "seg_" then
+        local seg_type = id:sub(5)
+        if state.submission_data.segment_type ~= seg_type then
+            state.submission_data.segment_type = seg_type
+            render_submission_overlay()
+        end
+    end
+end
+
+local function submission_set_mbtn_binding(enable)
+    if enable and not state.submission_mbtn_bound then
+        mp.add_forced_key_binding("MBTN_LEFT", "jumpskip_submit_click", submission_handle_click)
+        state.submission_mbtn_bound = true
+    elseif not enable and state.submission_mbtn_bound then
+        mp.remove_key_binding("jumpskip_submit_click")
+        state.submission_mbtn_bound = false
+    end
+end
+
+local function submission_handle_mouse(x, y)
+    if not state.submission_visible then
+        if state.submission_hover then
+            state.submission_hover = nil
+            submission_set_mbtn_binding(false)
+        end
+        return
+    end
+
+    local hovered = nil
+    for _, btn in ipairs(state.submission_buttons) do
+        if x >= btn.x1 and x <= btn.x2 and y >= btn.y1 and y <= btn.y2 then
+            hovered = btn.id
+            break
+        end
+    end
+
+    if hovered ~= state.submission_hover then
+        state.submission_hover = hovered
+        submission_set_mbtn_binding(hovered ~= nil)
+        render_submission_overlay()
+    end
+end
 
 local function log_segments_summary(segments, providers_raw)
     local sep = string.rep("-", 60)
@@ -2058,7 +2884,22 @@ local function check_playback_position(current_time)
 end
 
 local function on_mouse_pos(_, mouse)
-    if not state.button_visible or not mouse then
+    if not mouse then
+        return
+    end
+
+    local x, y = mouse.x, mouse.y
+
+    if state.submission_visible then
+        submission_handle_mouse(x, y)
+        if state.mouse_hover then
+            state.mouse_hover = false
+            set_mbtn_binding(false)
+        end
+        return
+    end
+
+    if not state.button_visible then
         if state.mouse_hover then
             state.mouse_hover = false
             set_mbtn_binding(false)
@@ -2067,7 +2908,6 @@ local function on_mouse_pos(_, mouse)
         return
     end
 
-    local x, y = mouse.x, mouse.y
     local is_inside = (x >= state.box.x1 and x <= state.box.x2 and
                        y >= state.box.y1 and y <= state.box.y2)
     if is_inside ~= state.mouse_hover then
@@ -2086,6 +2926,19 @@ local function reset_state()
     state.segments         = {}
     state.base_chapter_list = nil
     set_mbtn_binding(false)
+    if state.submission_visible then
+        close_submission_overlay()
+    end
+    if state.submission_status_timer then
+        state.submission_status_timer:kill()
+        state.submission_status_timer = nil
+    end
+    state.submission_data.segment_type = "intro"
+    state.submission_data.start_sec = nil
+    state.submission_data.end_sec = nil
+    state.submission_data.status = ""
+    state.submission_data.status_color = "FFFFFF"
+    state.submission_data.submitting = false
     if state.auto_skip_timer then
         state.auto_skip_timer:kill()
         state.auto_skip_timer = nil
@@ -2261,6 +3114,7 @@ local function on_osd_dimensions_change(_, dim)
         state.display_w = dim.w
         state.display_h = dim.h
         if state.button_visible then render_skip_button() end
+        if state.submission_visible then render_submission_overlay() end
     end
 end
 
