@@ -1,6 +1,6 @@
 --[[
     mpv-skip-segment
-    version 1.9
+    version 2.0
     ================
     A Lua script for mpv that detects and skips segments (intros, recaps, outros/credits, previews,
     and movie end-credits/post-credits) using crowdsourced data from TheIntroDB (api.theintrodb.org),
@@ -367,6 +367,78 @@ function TitleParser.clean_title(raw)
     return s:match("^%s*(.-)%s*$") or ""
 end
 
+function TitleParser.parse_season_episode(str)
+    if not str or #str == 0 then return nil, nil, nil, false end
+    
+    local s_title, s, e
+    local season_missing = false
+
+    s_title, s, e = str:match("^(.-)[%._%-%s%([]+[sS](%d%d?)[%._%-%s%]]*[eE](%d%d?%d?)")
+
+    if not s_title then
+        s_title, s, e = str:match("^(.-)[%._%-%s%([]+(%d%d?)[xX](%d%d?%d?)")
+    end
+
+    if not s_title then
+        s_title, s, e = str:match("^(.-)[%._%-%s%([]+[sS]eason[%._%-%s]*(%d%d?)[%._%-%s%]]*[eE]pisode[%._%-%s]*(%d%d?%d?)")
+    end
+
+    if not s_title then
+        local st, ep = str:match("^(.-)[%._%-%s%([]+[eE]pisode[%._%-%s]*(%d%d?%d?)")
+        if st and ep then
+            s_title, s, e = st, "1", ep
+            season_missing = true
+        end
+    end
+
+    if not s_title then
+        local st, ep = str:match("^(.-)[%._%-%s%([]+[eE][pP][%._%-%s]*(%d%d?%d?)")
+        if st and ep then
+            s_title, s, e = st, "1", ep
+            season_missing = true
+        end
+    end
+
+    if not s_title then
+        local st, ep = str:match("^(.-)[%._%-%s%([]+[eE](%d%d?%d?)$")
+        if not st then
+            st, ep = str:match("^(.-)[%._%-%s%([]+[eE](%d%d?%d?)[%._%-%s%)%]]")
+        end
+        if st and ep then
+            s_title, s, e = st, "1", ep
+            season_missing = true
+        end
+    end
+
+    if not s_title then
+        local st, ep = str:match("^(.-)[%s%._%-]+[eE]pisode[%s%._%-]+(%d%d?%d?)[%s%._%-%)%]]*$")
+        if not st then
+            st, ep = str:match("^(.-)[%s%._%-]+[eE]pisode[%s%._%-]+(%d%d?%d?)")
+        end
+        if not st then
+            st, ep = str:match("^(.-)[%s%._%-]+[eE][pP][%s%._%-]+(%d%d?%d?)[%s%._%-%)%]]*$")
+        end
+        if not st then
+            st, ep = str:match("^(.-)[%s%._%-]+[eE][pP][%s%._%-]+(%d%d?%d?)")
+        end
+        if st and ep then
+            local num = tonumber(ep)
+            if num and num > 0 and num <= 999 then
+                st = st:gsub("[%s%._%-]+[eE]pisode[%s%._%-]*$", "")
+                st = st:gsub("[%s%._%-]+[eE][pP][%s%._%-]*$", "")
+                s_title, s, e = st, "1", ep
+                season_missing = true
+            end
+        end
+    end
+
+    if s_title and #s_title > 1 and s and e then
+        return TitleParser.clean_title(s_title), tonumber(s), tonumber(e), season_missing
+    end
+
+    return nil, nil, nil, false
+end
+
 function TitleParser.canonical_title(str)
     if not str then return "" end
     local s = str:lower()
@@ -657,86 +729,48 @@ function TitleParser.extract_media_metadata(path, filename, raw_media_title, met
         if id_str then info.tvdb_id = tonumber(id_str) end
     end
 
+    local function is_generic_stream_filename(fn)
+        if not fn then return false end
+        local lower_fn = fn:lower()
+        local generic_patterns = {
+            "^index%.m3u8$",
+            "^master%.m3u8$",
+            "^playlist%.m3u8$",
+            "^stream%.m3u8$",
+            "^video%.m3u8$",
+            "^audio%.m3u8$",
+            "^media%.m3u8$",
+            "^live%.m3u8$",
+            "^manifest%.mpd$",
+            "^manifest%.m3u8$",
+            "^seg%-%d+%.ts$",
+            "^segment%-%d+%.ts$",
+            "^chunk%-%d+%.ts$",
+            "^init%.mp4$",
+            "^init%.m4s$",
+        }
+        for _, pattern in ipairs(generic_patterns) do
+            if lower_fn:match(pattern) then
+                return true
+            end
+        end
+        return false
+    end
+
     local fn = filename
-    if fn and #fn > 0 and not fn:match("^av://") and not fn:match("^lavfi:") then
+    local use_filename = fn and #fn > 0 and not fn:match("^av://") and not fn:match("^lavfi:") and not is_generic_stream_filename(fn)
+    if use_filename then
         local fn_base = fn:gsub("%.[a-zA-Z0-9]+$", "")
         local fn_clean = fn_base:gsub("^%s*%b[]%s*", "")
         fn_clean = fn_clean:gsub("%-[%w_%.]+$", "")
 
-        local s_title, s, e
-        local season_missing = false
-
-        s_title, s, e = fn_clean:match("^(.-)[%._%-%s%([]+[sS](%d%d?)[%._%-%s%]]*[eE](%d%d?%d?)")
-
-        if not s_title then
-            s_title, s, e = fn_clean:match("^(.-)[%._%-%s%([]+(%d%d?)[xX](%d%d?%d?)")
-        end
-
-        if not s_title then
-            s_title, s, e = fn_clean:match("^(.-)[%._%-%s%([]+[sS]eason[%._%-%s]*(%d%d?)[%._%-%s%]]*[eE]pisode[%._%-%s]*(%d%d?%d?)")
-        end
-
-        if not s_title then
-            local st, ep = fn_clean:match("^(.-)[%._%-%s%([]+[eE]pisode[%._%-%s]*(%d%d?%d?)")
-            if st and ep then
-                s_title, s, e = st, "1", ep
-                season_missing = true
-            end
-        end
-
-        if not s_title then
-            local st, ep = fn_clean:match("^(.-)[%._%-%s%([]+[eE][pP][%._%-%s]*(%d%d?%d?)")
-            if st and ep then
-                s_title, s, e = st, "1", ep
-                season_missing = true
-            end
-        end
-
-        if not s_title then
-            local st, ep = fn_clean:match("^(.-)[%._%-%s%([]+[eE](%d%d?%d?)$")
-            if not st then
-                st, ep = fn_clean:match("^(.-)[%._%-%s%([]+[eE](%d%d?%d?)[%._%-%s%)%]]")
-            end
-            if st and ep then
-                s_title, s, e = st, "1", ep
-                season_missing = true
-            end
-        end
-
-        if not s_title then
-            local st, ep = fn_clean:match("^(.-)[%s%._%-]%-%s*(%d%d?%d?)$")
-            if not st then
-                st, ep = fn_clean:match("^(.-)[%s%._%-]%-%s*(%d%d?%d?)[%s%._%-%)%]]")
-            end
-            if st and ep then
-                local num = tonumber(ep)
-                if num and num > 0 and num <= 999 then
-                    s_title, s, e = st, "1", ep
-                    season_missing = true
-                end
-            end
-        end
-
-        if not s_title then
-            local st, ep = fn_clean:match("^(.-)[%s%._%-]+(0%d%d?)$")
-            if not st then
-                st, ep = fn_clean:match("^(.-)[%s%._%-]+(0%d%d?)[%s%._%-%)%]]")
-            end
-            if st and ep then
-                local num = tonumber(ep)
-                if num and num > 0 and num <= 999 then
-                    s_title, s, e = st, "1", ep
-                    season_missing = true
-                end
-            end
-        end
-
-        if s_title and #s_title > 1 and s and e then
+        local parsed_title, parsed_season, parsed_episode, parsed_season_missing = TitleParser.parse_season_episode(fn_clean)
+        if parsed_title then
             info.is_tv = true
-            info.season = tonumber(s)
-            info.episode = tonumber(e)
-            info.season_missing = season_missing
-            info.title = TitleParser.clean_title(s_title)
+            info.season = parsed_season
+            info.episode = parsed_episode
+            info.season_missing = parsed_season_missing
+            info.title = parsed_title
         end
 
         if not info.title then
@@ -775,17 +809,41 @@ function TitleParser.extract_media_metadata(path, filename, raw_media_title, met
         end
     end
 
-    if not info.title or #info.title == 0 then
+    local fn_was_generic = fn and #fn > 0 and is_generic_stream_filename(fn)
+    local parsed_title = nil
+    local parsed_season = nil
+    local parsed_episode = nil
+    local parsed_season_missing = false
+
+    if fn_was_generic and raw_media_title and not raw_media_title:match("^av://") and not raw_media_title:match("^lavfi:") then
+        local raw_clean = raw_media_title:gsub("%.[a-zA-Z0-9]+$", "")
+        raw_clean = raw_clean:gsub("^%s*%b[]%s*", "")
+        raw_clean = raw_clean:gsub("%-[%w_%.]+$", "")
+
+        parsed_title, parsed_season, parsed_episode, parsed_season_missing = TitleParser.parse_season_episode(raw_clean)
+    end
+
+    if not info.title or #info.title == 0 or fn_was_generic then
         for key, val in pairs(metadata) do
             local k = string.lower(tostring(key))
             if (k == "show" or k == "series") and not info.title then
                 info.title = TitleParser.clean_title(tostring(val))
             end
         end
-        if not info.title and raw_media_title
+        
+        if parsed_title then
+            info.title = parsed_title
+            info.is_tv = true
+            info.season = parsed_season
+            info.episode = parsed_episode
+            info.season_missing = parsed_season_missing
+        elseif not info.title and raw_media_title
                 and not raw_media_title:match("^av://")
                 and not raw_media_title:match("^lavfi:") then
             info.title = TitleParser.clean_title(raw_media_title)
+        end
+        if info.title and is_generic_stream_filename(info.title) then
+            info.title = nil
         end
     end
 
