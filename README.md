@@ -20,14 +20,17 @@ OSC by [ModernZ](https://github.com/Samillion/ModernZ)
 
 <img width="24" height="24" alt="output-onlinepngtools (3)" src="https://github.com/user-attachments/assets/8e9ba2fd-bceb-4426-a26c-b0c3bbe367bc" /> Preview/Post-Credits
 
-
 All colors are changeable in **`modernz.conf`** or **`uosc.conf`**
 
----
+-------
+**:white_check_mark: Works with [ani-cli](https://github.com/pystardust/ani-cli)**
+------
+
 > [!NOTE]
 > ### You can check quarried segments in **Console**.
 > ### If the movie/TV show is not found, open an [Issue](https://github.com/ElectricArdvark/jumpskip/issues) to help improve detection.
 
+------
 ### Checkout my [MPV Config](https://github.com/ElectricArdvark/jumpskip/wiki/MPV-Config)
 
 ---
@@ -132,6 +135,16 @@ skip_outro=yes
 skip_preview=yes
 skip_post_credits=yes
 
+# Timestamps Submission (Provider API key required):
+# Master toggle
+enable_submission=yes
+# Keybinding to open/close the submission overlay.
+submission_keybind=Ctrl+q
+# Per-provider submission toggles
+theintrodb_submit_enabled=yes
+introdb_submit_enabled=yes
+skipdb_submit_enabled=yes
+
 # Provider options:
 # Per-media-type provider priority
 provider_priority_tvshow=introdb,theintrodb,skipdb
@@ -235,9 +248,10 @@ debug_mode=no
 ## TO-DO
 - [x] Add IntroDB movies.
 - [x] Add Per-media type, provider priority.
-- [x] Add Colored segments support to other osc.
 - [x] Add Timestamps Submission.
+- [x] Add Colored segments support to other osc.
   - [x] uosc
+- [x] Add ani-cli support.
 - [ ] Add AniSkip.
 
 ## Changelog
